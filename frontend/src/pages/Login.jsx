@@ -68,19 +68,10 @@ export default function Login() {
             </p>
           </div>
 
-          {/* Stats */}
-          <div className="flex items-center gap-10">
-            {[
-              { value: '12', label: 'Enqueteurs' },
-              { value: '3', label: 'Enquetes' },
-              { value: '14', label: 'Pays' },
-            ].map((stat, i) => (
-              <div key={i}>
-                <p className="text-3xl font-bold text-white">{stat.value}</p>
-                <p className="text-sm text-white/60">{stat.label}</p>
-              </div>
-            ))}
-          </div>
+          {/* Footer */}
+          <p className="text-sm text-white/60">
+            Plateforme securisee de suivi des collectes
+          </p>
         </div>
       </div>
 
