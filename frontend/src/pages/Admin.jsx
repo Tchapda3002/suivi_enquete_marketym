@@ -736,7 +736,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, start
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {(paysFilter === 'all' ? statsByPays.slice(0, 9) : statsByPays.filter(p => p.pays === paysFilter)).map((pays, i) => {
+          {(paysFilter === 'all' ? statsByPays : statsByPays.filter(p => p.pays === paysFilter)).map((pays, i) => {
             const pct = pays.objectif > 0 ? Math.round((pays.completions / pays.objectif) * 100) : 0
             return (
               <div
