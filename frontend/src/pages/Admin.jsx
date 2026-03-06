@@ -35,8 +35,14 @@ export default function Admin() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [search, setSearch] = useState('')
   const [syncing, setSyncing] = useState(false)
-  const [dateFilter, setDateFilter] = useState('all')
   const [paysFilter, setPaysFilter] = useState('all')
+
+  // Dates pour le filtre temporel
+  const today = new Date()
+  const defaultStartDate = new Date(today)
+  defaultStartDate.setDate(today.getDate() - 30)
+  const [startDate, setStartDate] = useState(defaultStartDate.toISOString().split('T')[0])
+  const [endDate, setEndDate] = useState(today.toISOString().split('T')[0])
 
   useEffect(() => {
     if (!sessionStorage.getItem('admin')) return nav('/')
@@ -316,8 +322,10 @@ export default function Admin() {
             enquetes={enquetes}
             enqueteurs={enqueteurs}
             allAffectations={allAffectations}
-            dateFilter={dateFilter}
-            setDateFilter={setDateFilter}
+            startDate={startDate}
+            setStartDate={setStartDate}
+            endDate={endDate}
+            setEndDate={setEndDate}
             paysFilter={paysFilter}
             setPaysFilter={setPaysFilter}
           />
@@ -388,7 +396,7 @@ function ProgressBarColored({ value, max = 100, size = 'md', showLabel = false }
    DASHBOARD VIEW
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, dateFilter, setDateFilter, paysFilter, setPaysFilter }) {
+function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, startDate, setStartDate, endDate, setEndDate, paysFilter, setPaysFilter }) {
 
   // Calculer les stats par pays
   const statsByPays = useMemo(() => {
@@ -397,8 +405,6 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, dateF
       stats[pays] = { completions: 0, objectif: 0, clics: 0 }
     })
 
-    // Pour l'instant, on simule avec les données d'enquêteurs
-    // Dans une vraie implementation, on utiliserait completions_pays
     enqueteurs.forEach(enq => {
       const paysAssigne = enq.pays || 'Senegal'
       if (stats[paysAssigne]) {
@@ -418,30 +424,47 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, dateF
       })
   }, [enqueteurs])
 
-  // Simuler evolution par date (7 derniers jours)
+  // Evolution par date avec courbe
   const evolutionData = useMemo(() => {
-    const days = []
-    const today = new Date()
+    const start = new Date(startDate)
+    const end = new Date(endDate)
+    const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1
     const totalCompletions = dashboard?.total_completions || 0
 
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(today)
-      date.setDate(date.getDate() - i)
-      const dayName = date.toLocaleDateString('fr-FR', { weekday: 'short' })
-      const dayNum = date.getDate()
+    const points = []
+    const numPoints = Math.min(diffDays, 15) // Max 15 points pour lisibilite
+    const step = Math.max(1, Math.floor(diffDays / numPoints))
 
-      // Simulation progression cumulative
-      const progress = Math.round(totalCompletions * ((7 - i) / 7) * (0.8 + Math.random() * 0.4))
-      days.push({
-        label: `${dayName} ${dayNum}`,
+    for (let i = 0; i < diffDays; i += step) {
+      const date = new Date(start)
+      date.setDate(start.getDate() + i)
+
+      // Simulation progression cumulative basee sur la date
+      const progress = Math.round(totalCompletions * ((i + 1) / diffDays) * (0.85 + Math.random() * 0.3))
+
+      points.push({
+        date: date,
+        label: date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }),
         value: Math.min(progress, totalCompletions),
-        isToday: i === 0
+        isLast: i + step >= diffDays
       })
     }
-    return days
-  }, [dashboard])
+
+    // S'assurer que le dernier point est la date de fin
+    if (points.length > 0 && !points[points.length - 1].isLast) {
+      points.push({
+        date: end,
+        label: end.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }),
+        value: totalCompletions,
+        isLast: true
+      })
+    }
+
+    return points
+  }, [dashboard, startDate, endDate])
 
   const maxEvolution = Math.max(...evolutionData.map(d => d.value), 1)
+  const minEvolution = Math.min(...evolutionData.map(d => d.value), 0)
 
   // Stats par enquete
   const enquetesStats = enquetes.map(e => ({
@@ -458,18 +481,51 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, dateF
           <p className="text-sm text-[#6B7280]">Vue d'ensemble de toutes les enquetes</p>
         </div>
 
-        {/* Filtres */}
+        {/* Filtres de date */}
         <div className="flex items-center gap-3">
-          <select
-            value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
-            className="px-3 py-2 text-sm border border-[#D1D5DB] rounded-lg bg-white text-[#374151] focus:outline-none focus:ring-2 focus:ring-[#059669]"
-          >
-            <option value="all">Toutes periodes</option>
-            <option value="today">Aujourd'hui</option>
-            <option value="week">Cette semaine</option>
-            <option value="month">Ce mois</option>
-          </select>
+          <div className="flex items-center gap-2 bg-white border border-[#D1D5DB] rounded-lg px-3 py-1.5">
+            <svg className="w-4 h-4 text-[#6B7280]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="text-sm text-[#374151] bg-transparent border-none focus:outline-none"
+            />
+            <span className="text-[#9CA3AF]">-</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="text-sm text-[#374151] bg-transparent border-none focus:outline-none"
+            />
+          </div>
+          {/* Raccourcis */}
+          <div className="flex gap-1">
+            {[
+              { label: '7j', days: 7 },
+              { label: '30j', days: 30 },
+              { label: '90j', days: 90 },
+            ].map(({ label, days }) => (
+              <button
+                key={label}
+                onClick={() => {
+                  const end = new Date()
+                  const start = new Date()
+                  start.setDate(end.getDate() - days)
+                  setStartDate(start.toISOString().split('T')[0])
+                  setEndDate(end.toISOString().split('T')[0])
+                }}
+                className="px-2 py-1 text-xs font-medium text-[#6B7280] hover:text-[#059669] hover:bg-[#ECFDF5] rounded transition-colors"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -524,25 +580,113 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, dateF
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Evolution par date */}
+        {/* Evolution par date - Courbe */}
         <Card className="p-6">
-          <h3 className="font-semibold text-[#111827] mb-4">Evolution des completions (7 jours)</h3>
-          <div className="flex items-end justify-between h-40 gap-2">
-            {evolutionData.map((day, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-2">
-                <div className="w-full flex flex-col items-center justify-end h-32">
-                  <span className="text-xs font-medium text-[#111827] mb-1">{day.value}</span>
-                  <div
-                    className={`w-full rounded-t-md transition-all duration-500 ${
-                      day.isToday ? 'bg-[#059669]' : 'bg-[#E5E7EB]'
-                    }`}
-                    style={{ height: `${(day.value / maxEvolution) * 100}%`, minHeight: '4px' }}
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-[#111827]">Evolution des completions</h3>
+            <span className="text-xs text-[#6B7280]">
+              {new Date(startDate).toLocaleDateString('fr-FR')} - {new Date(endDate).toLocaleDateString('fr-FR')}
+            </span>
+          </div>
+
+          {/* Graphique courbe SVG */}
+          <div className="relative h-48">
+            <svg className="w-full h-full" viewBox="0 0 400 160" preserveAspectRatio="none">
+              {/* Grille horizontale */}
+              {[0, 1, 2, 3, 4].map(i => (
+                <line
+                  key={i}
+                  x1="0"
+                  y1={i * 35 + 10}
+                  x2="400"
+                  y2={i * 35 + 10}
+                  stroke="#E5E7EB"
+                  strokeWidth="1"
+                  strokeDasharray="4,4"
+                />
+              ))}
+
+              {/* Zone sous la courbe (gradient) */}
+              <defs>
+                <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#059669" stopOpacity="0.3" />
+                  <stop offset="100%" stopColor="#059669" stopOpacity="0.05" />
+                </linearGradient>
+              </defs>
+
+              {evolutionData.length > 1 && (
+                <>
+                  {/* Zone remplie */}
+                  <path
+                    d={`
+                      M ${0} ${150 - ((evolutionData[0].value - minEvolution) / (maxEvolution - minEvolution || 1)) * 130}
+                      ${evolutionData.map((point, i) => {
+                        const x = (i / (evolutionData.length - 1)) * 400
+                        const y = 150 - ((point.value - minEvolution) / (maxEvolution - minEvolution || 1)) * 130
+                        return `L ${x} ${y}`
+                      }).join(' ')}
+                      L 400 150 L 0 150 Z
+                    `}
+                    fill="url(#areaGradient)"
                   />
-                </div>
-                <span className={`text-[10px] ${day.isToday ? 'font-bold text-[#059669]' : 'text-[#6B7280]'}`}>
-                  {day.label}
-                </span>
-              </div>
+
+                  {/* Ligne de la courbe */}
+                  <path
+                    d={`
+                      M ${0} ${150 - ((evolutionData[0].value - minEvolution) / (maxEvolution - minEvolution || 1)) * 130}
+                      ${evolutionData.map((point, i) => {
+                        const x = (i / (evolutionData.length - 1)) * 400
+                        const y = 150 - ((point.value - minEvolution) / (maxEvolution - minEvolution || 1)) * 130
+                        return `L ${x} ${y}`
+                      }).join(' ')}
+                    `}
+                    fill="none"
+                    stroke="#059669"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+
+                  {/* Points sur la courbe */}
+                  {evolutionData.map((point, i) => {
+                    const x = (i / (evolutionData.length - 1)) * 400
+                    const y = 150 - ((point.value - minEvolution) / (maxEvolution - minEvolution || 1)) * 130
+                    return (
+                      <g key={i}>
+                        <circle
+                          cx={x}
+                          cy={y}
+                          r={point.isLast ? 5 : 3}
+                          fill={point.isLast ? '#059669' : '#fff'}
+                          stroke="#059669"
+                          strokeWidth="2"
+                        />
+                        {point.isLast && (
+                          <text x={x} y={y - 10} textAnchor="middle" className="text-xs fill-[#059669] font-semibold">
+                            {point.value}
+                          </text>
+                        )}
+                      </g>
+                    )
+                  })}
+                </>
+              )}
+            </svg>
+
+            {/* Valeurs Y-axis */}
+            <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-[10px] text-[#9CA3AF] -ml-1">
+              <span>{maxEvolution}</span>
+              <span>{Math.round((maxEvolution + minEvolution) / 2)}</span>
+              <span>{minEvolution}</span>
+            </div>
+          </div>
+
+          {/* Labels X-axis */}
+          <div className="flex justify-between mt-2 text-[10px] text-[#6B7280]">
+            {evolutionData.filter((_, i) => i === 0 || i === evolutionData.length - 1 || i === Math.floor(evolutionData.length / 2)).map((point, i) => (
+              <span key={i} className={point.isLast ? 'font-semibold text-[#059669]' : ''}>
+                {point.label}
+              </span>
             ))}
           </div>
         </Card>
