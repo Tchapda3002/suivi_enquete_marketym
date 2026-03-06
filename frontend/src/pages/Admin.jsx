@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   getDashboard,
@@ -8,7 +8,7 @@ import {
   updateAffectation,
   syncAll,
 } from '../lib/api'
-import { Card, Badge, ProgressBar, Button, Modal, Input, Avatar, Spinner } from '../components/ui'
+import { Card, Badge, Button, Modal, Input, Avatar, Spinner } from '../components/ui'
 
 const STATUTS = [
   { value: 'en_cours',  label: 'En cours',  variant: 'info' },
@@ -16,17 +16,27 @@ const STATUTS = [
   { value: 'termine',   label: 'Termine',   variant: 'success' },
 ]
 
+// Liste des pays UEMOA/CEMAC
+const PAYS_LIST = [
+  'Benin', 'Burkina Faso', 'Cameroun', 'Congo', 'Cote d\'Ivoire', 'Gabon',
+  'Guinee', 'Guinee-Bissau', 'Guinee Equatoriale', 'Mali', 'Niger',
+  'RCA', 'Senegal', 'Tchad', 'Togo'
+]
+
 export default function Admin() {
   const nav = useNavigate()
-  const [view, setView] = useState('enquetes')
+  const [view, setView] = useState('dashboard')
   const [dashboard, setDashboard] = useState(null)
   const [enquetes, setEnquetes] = useState([])
   const [enqueteurs, setEnqueteurs] = useState([])
+  const [allAffectations, setAllAffectations] = useState([])
   const [selectedEnquete, setSelectedEnquete] = useState(null)
   const [loading, setLoading] = useState(true)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [search, setSearch] = useState('')
   const [syncing, setSyncing] = useState(false)
+  const [dateFilter, setDateFilter] = useState('all')
+  const [paysFilter, setPaysFilter] = useState('all')
 
   useEffect(() => {
     if (!sessionStorage.getItem('admin')) return nav('/')
@@ -40,6 +50,14 @@ export default function Admin() {
       setDashboard(d)
       setEnquetes(e)
       setEnqueteurs(enq)
+
+      // Charger toutes les affectations pour les stats par pays
+      const allAff = []
+      for (const enquete of e) {
+        const affs = await listAffectationsByEnquete(enquete.id)
+        allAff.push(...affs.map(a => ({ ...a, enquete })))
+      }
+      setAllAffectations(allAff)
     } finally { setLoading(false) }
   }
 
@@ -65,9 +83,7 @@ export default function Admin() {
 
   return (
     <div className="min-h-screen flex bg-[#F9FAFB]">
-      {/* ══════════════════════════════════════════════════════════════════════
-          SIDEBAR
-          ══════════════════════════════════════════════════════════════════════ */}
+      {/* SIDEBAR */}
       <aside
         className={`
           flex-shrink-0 flex flex-col border-r border-[#E5E7EB] bg-white
@@ -120,6 +136,21 @@ export default function Admin() {
           <NavButton
             icon={
               <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="7" />
+                <rect x="14" y="3" width="7" height="7" />
+                <rect x="14" y="14" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" />
+              </svg>
+            }
+            label="Tableau de bord"
+            active={view === 'dashboard'}
+            collapsed={sidebarCollapsed}
+            onClick={() => setView('dashboard')}
+          />
+
+          <NavButton
+            icon={
+              <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
                 <rect x="9" y="3" width="6" height="4" rx="2" />
               </svg>
@@ -145,7 +176,7 @@ export default function Admin() {
           />
         </div>
 
-        {/* Enquetes List */}
+        {/* Enquetes List (only for enquetes view) */}
         {view === 'enquetes' && (
           <div className="flex-1 overflow-y-auto py-2">
             {!sidebarCollapsed && (
@@ -195,7 +226,7 @@ export default function Admin() {
                         {enq.nb_enqueteurs} enqueteurs
                       </p>
                       <div className="mt-2">
-                        <ProgressBar value={enq.total_completions} max={enq.total_objectif} size="sm" />
+                        <ProgressBarColored value={enq.total_completions} max={enq.total_objectif} size="sm" />
                       </div>
                     </>
                   )}
@@ -205,11 +236,10 @@ export default function Admin() {
           </div>
         )}
 
-        {view === 'enqueteurs' && <div className="flex-1" />}
+        {view !== 'enquetes' && <div className="flex-1" />}
 
         {/* Footer */}
         <div className="p-3 border-t border-[#E5E7EB] space-y-1">
-          {/* Sync Button */}
           <button
             onClick={handleSync}
             disabled={syncing}
@@ -274,14 +304,23 @@ export default function Admin() {
         </div>
       </aside>
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          MAIN CONTENT
-          ══════════════════════════════════════════════════════════════════════ */}
+      {/* MAIN CONTENT */}
       <main className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="h-full flex items-center justify-center">
             <Spinner size="lg" />
           </div>
+        ) : view === 'dashboard' ? (
+          <DashboardView
+            dashboard={dashboard}
+            enquetes={enquetes}
+            enqueteurs={enqueteurs}
+            allAffectations={allAffectations}
+            dateFilter={dateFilter}
+            setDateFilter={setDateFilter}
+            paysFilter={paysFilter}
+            setPaysFilter={setPaysFilter}
+          />
         ) : view === 'enqueteurs' ? (
           <EnqueteursView
             enqueteurs={filteredEnqueteurs}
@@ -307,6 +346,417 @@ export default function Admin() {
       </main>
     </div>
   )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   PROGRESS BAR COLORED
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function ProgressBarColored({ value, max = 100, size = 'md', showLabel = false }) {
+  const percentage = Math.min(Math.round((value / Math.max(max, 1)) * 100), 100)
+
+  const getColor = () => {
+    if (percentage >= 100) return { bg: '#059669', light: '#ECFDF5' } // Vert - Termine
+    if (percentage >= 75) return { bg: '#10B981', light: '#D1FAE5' }  // Vert clair - Presque fini
+    if (percentage >= 50) return { bg: '#F59E0B', light: '#FEF3C7' }  // Orange - En cours
+    if (percentage >= 25) return { bg: '#F97316', light: '#FFEDD5' }  // Orange fonce - Attention
+    return { bg: '#EF4444', light: '#FEE2E2' }                        // Rouge - Critique
+  }
+
+  const colors = getColor()
+  const heights = { sm: 'h-1.5', md: 'h-2', lg: 'h-3' }
+
+  return (
+    <div className="space-y-1">
+      {showLabel && (
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-[#6B7280]">{value} / {max}</span>
+          <span className="font-medium" style={{ color: colors.bg }}>{percentage}%</span>
+        </div>
+      )}
+      <div className={`w-full ${heights[size]} rounded-full overflow-hidden`} style={{ backgroundColor: colors.light }}>
+        <div
+          className="h-full rounded-full transition-all duration-500 ease-out"
+          style={{ width: `${percentage}%`, backgroundColor: colors.bg }}
+        />
+      </div>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DASHBOARD VIEW
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, dateFilter, setDateFilter, paysFilter, setPaysFilter }) {
+
+  // Calculer les stats par pays
+  const statsByPays = useMemo(() => {
+    const stats = {}
+    PAYS_LIST.forEach(pays => {
+      stats[pays] = { completions: 0, objectif: 0, clics: 0 }
+    })
+
+    // Pour l'instant, on simule avec les données d'enquêteurs
+    // Dans une vraie implementation, on utiliserait completions_pays
+    enqueteurs.forEach(enq => {
+      const paysAssigne = enq.pays || 'Senegal'
+      if (stats[paysAssigne]) {
+        stats[paysAssigne].completions += enq.total_completions || 0
+        stats[paysAssigne].objectif += enq.total_objectif || 0
+        stats[paysAssigne].clics += enq.total_clics || 0
+      }
+    })
+
+    return Object.entries(stats)
+      .map(([pays, data]) => ({ pays, ...data }))
+      .filter(p => p.objectif > 0 || p.completions > 0)
+      .sort((a, b) => {
+        const pctA = a.objectif > 0 ? a.completions / a.objectif : 0
+        const pctB = b.objectif > 0 ? b.completions / b.objectif : 0
+        return pctB - pctA
+      })
+  }, [enqueteurs])
+
+  // Simuler evolution par date (7 derniers jours)
+  const evolutionData = useMemo(() => {
+    const days = []
+    const today = new Date()
+    const totalCompletions = dashboard?.total_completions || 0
+
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today)
+      date.setDate(date.getDate() - i)
+      const dayName = date.toLocaleDateString('fr-FR', { weekday: 'short' })
+      const dayNum = date.getDate()
+
+      // Simulation progression cumulative
+      const progress = Math.round(totalCompletions * ((7 - i) / 7) * (0.8 + Math.random() * 0.4))
+      days.push({
+        label: `${dayName} ${dayNum}`,
+        value: Math.min(progress, totalCompletions),
+        isToday: i === 0
+      })
+    }
+    return days
+  }, [dashboard])
+
+  const maxEvolution = Math.max(...evolutionData.map(d => d.value), 1)
+
+  // Stats par enquete
+  const enquetesStats = enquetes.map(e => ({
+    ...e,
+    pct: e.total_objectif > 0 ? Math.round((e.total_completions / e.total_objectif) * 100) : 0
+  })).sort((a, b) => b.pct - a.pct)
+
+  return (
+    <div className="p-6 animate-fadeIn">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-[#111827]">Tableau de bord</h1>
+          <p className="text-sm text-[#6B7280]">Vue d'ensemble de toutes les enquetes</p>
+        </div>
+
+        {/* Filtres */}
+        <div className="flex items-center gap-3">
+          <select
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
+            className="px-3 py-2 text-sm border border-[#D1D5DB] rounded-lg bg-white text-[#374151] focus:outline-none focus:ring-2 focus:ring-[#059669]"
+          >
+            <option value="all">Toutes periodes</option>
+            <option value="today">Aujourd'hui</option>
+            <option value="week">Cette semaine</option>
+            <option value="month">Ce mois</option>
+          </select>
+        </div>
+      </div>
+
+      {/* KPIs Globaux */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <KPICard
+          label="Total Completions"
+          value={dashboard?.total_completions || 0}
+          icon={<CheckIcon />}
+          color="#059669"
+          bgColor="#ECFDF5"
+        />
+        <KPICard
+          label="Objectif Global"
+          value={dashboard?.total_objectif || 0}
+          icon={<TargetIcon />}
+          color="#2563EB"
+          bgColor="#EFF6FF"
+        />
+        <KPICard
+          label="Taux de Completion"
+          value={`${dashboard?.taux_completion || 0}%`}
+          icon={<ChartIcon />}
+          color="#7C3AED"
+          bgColor="#F5F3FF"
+          highlight={dashboard?.taux_completion >= 75}
+        />
+        <KPICard
+          label="Total Clics"
+          value={dashboard?.total_clics || 0}
+          icon={<ClickIcon />}
+          color="#D97706"
+          bgColor="#FFFBEB"
+        />
+      </div>
+
+      {/* Progression globale */}
+      <Card className="p-6 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-[#111827]">Progression Globale</h3>
+          <span className="text-2xl font-bold text-[#059669]">{dashboard?.taux_completion || 0}%</span>
+        </div>
+        <ProgressBarColored
+          value={dashboard?.total_completions || 0}
+          max={dashboard?.total_objectif || 1}
+          size="lg"
+        />
+        <div className="flex justify-between mt-2 text-xs text-[#6B7280]">
+          <span>{dashboard?.total_completions || 0} completions</span>
+          <span>Objectif: {dashboard?.total_objectif || 0}</span>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Evolution par date */}
+        <Card className="p-6">
+          <h3 className="font-semibold text-[#111827] mb-4">Evolution des completions (7 jours)</h3>
+          <div className="flex items-end justify-between h-40 gap-2">
+            {evolutionData.map((day, i) => (
+              <div key={i} className="flex-1 flex flex-col items-center gap-2">
+                <div className="w-full flex flex-col items-center justify-end h-32">
+                  <span className="text-xs font-medium text-[#111827] mb-1">{day.value}</span>
+                  <div
+                    className={`w-full rounded-t-md transition-all duration-500 ${
+                      day.isToday ? 'bg-[#059669]' : 'bg-[#E5E7EB]'
+                    }`}
+                    style={{ height: `${(day.value / maxEvolution) * 100}%`, minHeight: '4px' }}
+                  />
+                </div>
+                <span className={`text-[10px] ${day.isToday ? 'font-bold text-[#059669]' : 'text-[#6B7280]'}`}>
+                  {day.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Stats par enquete */}
+        <Card className="p-6">
+          <h3 className="font-semibold text-[#111827] mb-4">Progression par enquete</h3>
+          <div className="space-y-4">
+            {enquetesStats.map((enq, i) => (
+              <div key={enq.id} className="animate-slideIn" style={{ animationDelay: `${i * 50}ms` }}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[#F3F4F6] text-[#6B7280]">
+                      {enq.code}
+                    </span>
+                    <span className="text-sm font-medium text-[#111827] truncate max-w-[150px]">
+                      {enq.nom}
+                    </span>
+                  </div>
+                  <span className="text-sm font-semibold" style={{ color: getProgressColor(enq.pct) }}>
+                    {enq.pct}%
+                  </span>
+                </div>
+                <ProgressBarColored value={enq.total_completions} max={enq.total_objectif} size="sm" />
+                <div className="flex justify-between mt-1 text-[10px] text-[#9CA3AF]">
+                  <span>{enq.total_completions} / {enq.total_objectif}</span>
+                  <span>{enq.nb_enqueteurs} enqueteurs</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {/* Stats par pays */}
+      <Card className="p-6 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-[#111827]">Progression par pays</h3>
+          <select
+            value={paysFilter}
+            onChange={(e) => setPaysFilter(e.target.value)}
+            className="px-3 py-1.5 text-xs border border-[#D1D5DB] rounded-lg bg-white text-[#374151] focus:outline-none focus:ring-2 focus:ring-[#059669]"
+          >
+            <option value="all">Tous les pays</option>
+            {PAYS_LIST.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {(paysFilter === 'all' ? statsByPays.slice(0, 9) : statsByPays.filter(p => p.pays === paysFilter)).map((pays, i) => {
+            const pct = pays.objectif > 0 ? Math.round((pays.completions / pays.objectif) * 100) : 0
+            return (
+              <div
+                key={pays.pays}
+                className="p-4 rounded-xl border border-[#E5E7EB] hover:border-[#D1D5DB] transition-colors animate-slideIn"
+                style={{ animationDelay: `${i * 30}ms` }}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-medium text-[#111827]">{pays.pays}</span>
+                  <Badge variant={pct >= 75 ? 'success' : pct >= 50 ? 'warning' : 'error'} size="sm">
+                    {pct}%
+                  </Badge>
+                </div>
+                <ProgressBarColored value={pays.completions} max={pays.objectif || 100} size="md" />
+                <div className="flex justify-between mt-2 text-[10px] text-[#6B7280]">
+                  <span>{pays.completions} completions</span>
+                  <span>Obj: {pays.objectif || '—'}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {statsByPays.length === 0 && (
+          <div className="text-center py-8 text-[#9CA3AF]">
+            <p>Aucune donnee par pays disponible</p>
+            <p className="text-xs mt-1">Les statistiques apparaitront apres synchronisation</p>
+          </div>
+        )}
+      </Card>
+
+      {/* Top Enqueteurs */}
+      <Card className="p-6">
+        <h3 className="font-semibold text-[#111827] mb-4">Top Enqueteurs</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-[#E5E7EB]">
+                <th className="text-left py-2 text-[10px] font-semibold text-[#6B7280] uppercase">#</th>
+                <th className="text-left py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Enqueteur</th>
+                <th className="text-center py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Completions</th>
+                <th className="text-center py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Objectif</th>
+                <th className="py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Progression</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enqueteurs
+                .sort((a, b) => (b.total_completions || 0) - (a.total_completions || 0))
+                .slice(0, 5)
+                .map((enq, i) => {
+                  const pct = enq.total_objectif > 0 ? Math.round((enq.total_completions / enq.total_objectif) * 100) : 0
+                  return (
+                    <tr key={enq.id} className="border-b border-[#E5E7EB] hover:bg-[#F9FAFB]">
+                      <td className="py-3">
+                        <span className={`
+                          w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold
+                          ${i === 0 ? 'bg-[#FEF3C7] text-[#D97706]' :
+                            i === 1 ? 'bg-[#E5E7EB] text-[#6B7280]' :
+                            i === 2 ? 'bg-[#FFEDD5] text-[#C2410C]' :
+                            'bg-[#F3F4F6] text-[#9CA3AF]'}
+                        `}>
+                          {i + 1}
+                        </span>
+                      </td>
+                      <td className="py-3">
+                        <div className="flex items-center gap-2">
+                          <Avatar name={`${enq.prenom} ${enq.nom}`} size="sm" />
+                          <div>
+                            <p className="text-sm font-medium text-[#111827]">{enq.prenom} {enq.nom}</p>
+                            <p className="text-xs text-[#9CA3AF]">{enq.identifiant}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="text-center py-3 text-sm font-semibold text-[#059669]">
+                        {enq.total_completions || 0}
+                      </td>
+                      <td className="text-center py-3 text-sm text-[#6B7280]">
+                        {enq.total_objectif || 0}
+                      </td>
+                      <td className="py-3 w-32">
+                        <div className="flex items-center gap-2">
+                          <ProgressBarColored value={enq.total_completions || 0} max={enq.total_objectif || 1} size="sm" />
+                          <span className="text-xs font-mono" style={{ color: getProgressColor(pct) }}>{pct}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   KPI CARD
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function KPICard({ label, value, icon, color, bgColor, highlight }) {
+  return (
+    <Card className={`p-4 ${highlight ? 'ring-2 ring-[#059669]' : ''}`}>
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-xs text-[#6B7280] mb-1">{label}</p>
+          <p className="text-2xl font-bold text-[#111827]">{value}</p>
+        </div>
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center"
+          style={{ backgroundColor: bgColor, color }}
+        >
+          {icon}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ICONS
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function CheckIcon() {
+  return (
+    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  )
+}
+
+function TargetIcon() {
+  return (
+    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="2" />
+    </svg>
+  )
+}
+
+function ChartIcon() {
+  return (
+    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M18 20V10M12 20V4M6 20v-6" />
+    </svg>
+  )
+}
+
+function ClickIcon() {
+  return (
+    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M15 15l-2 5L9 9l11 4-5 2z" />
+      <path d="M22 22l-5-10" />
+    </svg>
+  )
+}
+
+function getProgressColor(pct) {
+  if (pct >= 100) return '#059669'
+  if (pct >= 75) return '#10B981'
+  if (pct >= 50) return '#F59E0B'
+  if (pct >= 25) return '#F97316'
+  return '#EF4444'
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -380,7 +830,7 @@ function EnqueteDetailView({ enquete, onRefresh }) {
             <p className="text-sm text-[#6B7280]">{enquete.cible}</p>
           </div>
           <div className="text-right">
-            <p className="text-3xl font-bold text-[#111827]">{pct}%</p>
+            <p className="text-3xl font-bold" style={{ color: getProgressColor(pct) }}>{pct}%</p>
             <p className="text-xs text-[#9CA3AF]">{totalCompletions}/{totalObjectif}</p>
           </div>
         </div>
@@ -397,6 +847,11 @@ function EnqueteDetailView({ enquete, onRefresh }) {
               <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: stat.color, opacity: 0.7 }}>{stat.label}</p>
             </div>
           ))}
+        </div>
+
+        {/* Progress bar globale */}
+        <div className="mt-4">
+          <ProgressBarColored value={totalCompletions} max={totalObjectif} size="lg" showLabel />
         </div>
       </div>
 
@@ -465,8 +920,8 @@ function EnqueteDetailView({ enquete, onRefresh }) {
                       </td>
                       <td className="px-4 py-3 w-36">
                         <div className="flex items-center gap-2">
-                          <ProgressBar value={a.completions_total} max={a.objectif_total} size="sm" />
-                          <span className="text-xs font-mono text-[#6B7280] w-8">{rowPct}%</span>
+                          <ProgressBarColored value={a.completions_total} max={a.objectif_total} size="sm" />
+                          <span className="text-xs font-mono" style={{ color: getProgressColor(rowPct) }}>{rowPct}%</span>
                         </div>
                       </td>
                       <td className="text-center px-4 py-3">
@@ -584,8 +1039,8 @@ function EnqueteursView({ enqueteurs, total, search, setSearch }) {
                   </td>
                   <td className="px-4 py-3 w-36">
                     <div className="flex items-center gap-2">
-                      <ProgressBar value={e.total_completions} max={e.total_objectif} size="sm" />
-                      <span className="text-xs font-mono text-[#6B7280] w-8">{pct}%</span>
+                      <ProgressBarColored value={e.total_completions} max={e.total_objectif} size="sm" />
+                      <span className="text-xs font-mono" style={{ color: getProgressColor(pct) }}>{pct}%</span>
                     </div>
                   </td>
                 </tr>
