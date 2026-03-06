@@ -199,7 +199,7 @@ export default function Dashboard() {
       {/* ══════════════════════════════════════════════════════════════════════
           MAIN CONTENT
           ══════════════════════════════════════════════════════════════════════ */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto flex justify-center">
         {selectedAff ? (
           <EnqueteDetail affectation={selectedAff} />
         ) : (
@@ -233,7 +233,8 @@ function EnqueteDetail({ affectation }) {
     : 0
 
   return (
-    <div className="p-8 max-w-4xl animate-fadeIn">
+    <div className="w-full p-8 animate-fadeIn">
+      <div className="max-w-5xl mx-auto">
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div>
@@ -389,6 +390,7 @@ function EnqueteDetail({ affectation }) {
           </div>
         </Card>
       )}
+      </div>
     </div>
   )
 }
