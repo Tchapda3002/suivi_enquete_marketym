@@ -125,6 +125,11 @@ def login_enqueteur(data: LoginEnqueteur, sb: Client = Depends(get_supabase)):
     if not enq.get("actif", True):
         raise HTTPException(status_code=403, detail="Compte desactive")
 
+    # Mettre a jour la derniere connexion
+    sb.table("enqueteurs").update({
+        "derniere_connexion": datetime.utcnow().isoformat()
+    }).eq("id", enq["id"]).execute()
+
     # Recuperer ses affectations
     affectations = sb.table("affectations")\
         .select("*, enquetes(*)")\

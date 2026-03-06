@@ -895,6 +895,29 @@ function ClickIcon() {
   )
 }
 
+function formatTimeAgo(dateString) {
+  if (!dateString) return { text: 'Jamais connecte', isOnline: false }
+
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = now - date
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+
+  // Considere "en ligne" si connecte dans les 15 dernieres minutes
+  const isOnline = diffMins < 15
+
+  if (diffMins < 1) return { text: 'A l\'instant', isOnline: true }
+  if (diffMins < 15) return { text: `Il y a ${diffMins} min`, isOnline: true }
+  if (diffMins < 60) return { text: `Il y a ${diffMins} min`, isOnline: false }
+  if (diffHours < 24) return { text: `Il y a ${diffHours}h`, isOnline: false }
+  if (diffDays === 1) return { text: 'Hier', isOnline: false }
+  if (diffDays < 7) return { text: `Il y a ${diffDays} jours`, isOnline: false }
+
+  return { text: date.toLocaleDateString('fr-FR'), isOnline: false }
+}
+
 function getProgressColor(pct) {
   if (pct >= 100) return '#059669'
   if (pct >= 75) return '#10B981'
@@ -1146,11 +1169,15 @@ function EnqueteursView({ enqueteurs, total, search, setSearch }) {
               <th className="px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider">
                 Progression
               </th>
+              <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider">
+                Derniere connexion
+              </th>
             </tr>
           </thead>
           <tbody>
             {enqueteurs.map((e, i) => {
               const pct = e.total_objectif > 0 ? Math.round((e.total_completions / e.total_objectif) * 100) : 0
+              const lastConnexion = formatTimeAgo(e.derniere_connexion)
               return (
                 <tr
                   key={e.id}
@@ -1162,7 +1189,12 @@ function EnqueteursView({ enqueteurs, total, search, setSearch }) {
                 >
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <Avatar name={`${e.prenom} ${e.nom}`} size="sm" />
+                      <div className="relative">
+                        <Avatar name={`${e.prenom} ${e.nom}`} size="sm" />
+                        {lastConnexion.isOnline && (
+                          <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-[#059669] border-2 border-white rounded-full" />
+                        )}
+                      </div>
                       <div>
                         <p className="text-sm font-medium text-[#111827]">{e.prenom} {e.nom}</p>
                         <p className="text-xs font-mono text-[#9CA3AF]">{e.identifiant}</p>
@@ -1185,6 +1217,14 @@ function EnqueteursView({ enqueteurs, total, search, setSearch }) {
                     <div className="flex items-center gap-2">
                       <ProgressBarColored value={e.total_completions} max={e.total_objectif} size="sm" />
                       <span className="text-xs font-mono" style={{ color: getProgressColor(pct) }}>{pct}%</span>
+                    </div>
+                  </td>
+                  <td className="text-center px-4 py-3">
+                    <div className={`text-xs ${lastConnexion.isOnline ? 'text-[#059669] font-medium' : 'text-[#9CA3AF]'}`}>
+                      {lastConnexion.isOnline && (
+                        <span className="inline-block w-2 h-2 bg-[#059669] rounded-full mr-1.5 animate-pulse" />
+                      )}
+                      {lastConnexion.text}
                     </div>
                   </td>
                 </tr>
