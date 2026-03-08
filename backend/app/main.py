@@ -1375,69 +1375,46 @@ async def get_historique_enquete(enquete_id: str, days: int = 30, admin: dict = 
     return result
 
 @app.get("/enqueteur/{id}/historique")
-async def get_historique_enqueteur(id: str, days: int = 30, sb: Client = Depends(get_supabase)):
-    """Historique des completions pour un enqueteur (basé sur timestamps QuestionPro)"""
+def get_historique_enqueteur(id: str, days: int = 30, sb: Client = Depends(get_supabase)):
+    """Historique des completions pour un enqueteur (basé sur la table historique_completions)"""
     from datetime import timedelta
 
-    # Verifier que l'enqueteur existe et recuperer son token
-    enq = sb.table("enqueteurs").select("id, token").eq("id", id).execute()
+    # Verifier que l'enqueteur existe
+    enq = sb.table("enqueteurs").select("id").eq("id", id).execute()
     if not enq.data:
         raise HTTPException(status_code=404, detail="Enqueteur introuvable")
 
-    enqueteur_token = enq.data[0].get("token")
-    start_date = (datetime.utcnow() - timedelta(days=days)).date()
+    start_date = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
 
-    # Recuperer les affectations de cet enqueteur avec les enquetes
+    # Recuperer les affectations de cet enqueteur
     affectations = sb.table("affectations")\
-        .select("id, enquetes(survey_id)")\
+        .select("id")\
         .eq("enqueteur_id", id)\
         .execute()
 
     if not affectations.data:
         return []
 
-    # Agreger les reponses de toutes les enquetes de cet enqueteur
-    all_daily_counts = {}
+    aff_ids = [a["id"] for a in affectations.data]
 
-    for aff in affectations.data:
-        enquete = aff.get("enquetes", {})
-        survey_id = enquete.get("survey_id") if enquete else None
-        if not survey_id:
-            continue
+    # Recuperer l'historique depuis la table historique_completions
+    historique = sb.table("historique_completions")\
+        .select("date, completions")\
+        .in_("affectation_id", aff_ids)\
+        .gte("date", start_date)\
+        .order("date")\
+        .execute()
 
-        # Recuperer toutes les reponses
-        responses = await fetch_all_survey_responses(survey_id)
+    # Agreger par date (car un enqueteur peut avoir plusieurs affectations)
+    daily_counts = {}
+    for h in historique.data:
+        date = h["date"]
+        if date not in daily_counts:
+            daily_counts[date] = 0
+        daily_counts[date] += h.get("completions", 0)
 
-        # Filtrer les reponses qui appartiennent a cet enqueteur (via custom1 = token)
-        for resp in responses:
-            if resp.get("responseStatus") != "Completed":
-                continue
-
-            # Verifier si la reponse appartient a cet enqueteur
-            custom_variables = resp.get("customVariables", [])
-            resp_token = None
-            for cv in custom_variables:
-                if cv.get("variableName") == "custom1":
-                    resp_token = cv.get("variableValue")
-                    break
-
-            if resp_token != enqueteur_token:
-                continue
-
-            # Extraire la date
-            utc_ts = resp.get("utctimestamp")
-            if utc_ts:
-                date = datetime.utcfromtimestamp(utc_ts).date().isoformat()
-                if date not in all_daily_counts:
-                    all_daily_counts[date] = 0
-                all_daily_counts[date] += 1
-
-    # Filtrer par date de debut et convertir en liste
-    result = []
-    for date, completions in all_daily_counts.items():
-        if datetime.fromisoformat(date).date() >= start_date:
-            result.append({"date": date, "completions": completions})
-
+    # Convertir en liste
+    result = [{"date": date, "completions": completions} for date, completions in daily_counts.items()]
     result.sort(key=lambda x: x["date"])
     return result
 
