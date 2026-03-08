@@ -1387,9 +1387,9 @@ async def get_historique_enqueteur(id: str, days: int = 30, sb: Client = Depends
     enqueteur_token = enq.data[0].get("token")
     start_date = (datetime.utcnow() - timedelta(days=days)).date()
 
-    # Recuperer les affectations de cet enqueteur
+    # Recuperer les affectations de cet enqueteur avec les enquetes
     affectations = sb.table("affectations")\
-        .select("id, survey_id")\
+        .select("id, enquetes(survey_id)")\
         .eq("enqueteur_id", id)\
         .execute()
 
@@ -1400,7 +1400,8 @@ async def get_historique_enqueteur(id: str, days: int = 30, sb: Client = Depends
     all_daily_counts = {}
 
     for aff in affectations.data:
-        survey_id = aff.get("survey_id")
+        enquete = aff.get("enquetes", {})
+        survey_id = enquete.get("survey_id") if enquete else None
         if not survey_id:
             continue
 
