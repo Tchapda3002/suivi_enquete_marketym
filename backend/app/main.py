@@ -481,20 +481,21 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
     enqueteurs = sb.table("enqueteurs").select("*").execute()
     affectations = sb.table("affectations").select("objectif_total, completions_total, clics, statut").execute()
 
-    # Recuperer completions_pays pour calculer valides (legacy)
-    completions_pays = sb.table("completions_pays").select("completions, objectif").execute()
-
     # Objectif global = somme des tailles d'echantillon de toutes les enquetes
     total_objectif = sum(e.get("taille_echantillon", 0) for e in enquetes.data)
     total_completions = sum(a["completions_total"] for a in affectations.data)
     total_clics = sum(a["clics"] for a in affectations.data)
 
-    # Calculer valides = sum(min(completions, objectif)) pour chaque pays
+    # Calculer valides basé sur les QUOTAS GLOBAUX (table quotas)
+    # Les quotas globaux definissent l'objectif par segment pour toute l'enquete
+    quotas = sb.table("quotas").select("objectif, completions").execute()
+
     total_valides = 0
-    for cp in completions_pays.data:
-        completions = cp.get("completions", 0)
-        objectif = cp.get("objectif", 0)
+    for q in quotas.data:
+        completions = q.get("completions", 0) or 0
+        objectif = q.get("objectif", 0) or 0
         if objectif > 0:
+            # Valide = min(completions, objectif) - les debordements sont exclus
             total_valides += min(completions, objectif)
         else:
             total_valides += completions
@@ -1066,6 +1067,37 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         "invalid_total": total_non_attribuees,
         "derniere_synchro": datetime.utcnow().isoformat()
     }).eq("id", affectation_id).execute()
+
+    # 9. Mettre a jour les QUOTAS GLOBAUX pour l'enquete
+    # Agreger les completions de TOUTES les affectations de cette enquete
+    enquete_id = aff_info.data[0].get("enquete_id") if aff_info.data else None
+    if enquete_id:
+        # Recuperer toutes les affectations de cette enquete
+        all_affs = sb.table("affectations").select("id").eq("enquete_id", enquete_id).execute()
+        all_aff_ids = [a["id"] for a in all_affs.data]
+
+        if all_aff_ids:
+            # Recuperer toutes les completions_segments de ces affectations
+            all_segments = sb.table("completions_segments")\
+                .select("segment_value, completions")\
+                .in_("affectation_id", all_aff_ids)\
+                .execute()
+
+            # Agreger par segment_value
+            global_counts = {}
+            for s in all_segments.data:
+                seg = s.get("segment_value", "")
+                count = s.get("completions", 0) or 0
+                if seg:
+                    global_counts[seg] = global_counts.get(seg, 0) + count
+
+            # Mettre a jour les quotas globaux
+            for segment_value, total_completions in global_counts.items():
+                # Chercher le quota correspondant (via segmentation de l'enquete)
+                sb.table("quotas").update({
+                    "completions": total_completions,
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("segment_value", segment_value).is_("affectation_id", "null").execute()
 
     # Note: L'historique est maintenant basé sur les timestamps QuestionPro directement
     # Plus besoin d'enregistrer dans historique_completions
