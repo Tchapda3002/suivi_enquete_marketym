@@ -149,26 +149,28 @@ def normalize_country_name(name: str) -> str:
     normalized = ' '.join(normalized.split())
     return normalized
 
-# Mapping QuestionPro -> Base de donnees
+# Mapping QuestionPro -> Base de donnees (normalise)
 PAYS_MAPPING = {
-    "benin": "Benin",
-    "senegal": "Senegal",
-    "cote divoire": "Cote d'Ivoire",
-    "cotedivoire": "Cote d'Ivoire",
-    "mali": "Mali",
-    "burkina faso": "Burkina Faso",
-    "niger": "Niger",
-    "togo": "Togo",
-    "guinee-bissau": "Guinee-Bissau",
-    "guinee bissau": "Guinee-Bissau",
-    "cameroun": "Cameroun",
-    "gabon": "Gabon",
-    "congo": "Congo",
-    "tchad": "Tchad",
-    "rca": "RCA",
-    "centrafrique": "RCA",
-    "guinee equatoriale": "Guinee Equatoriale",
-    "mauritanie": "Mauritanie",
+    "benin": "benin",
+    "senegal": "senegal",
+    "cote divoire": "cote divoire",
+    "cotedivoire": "cote divoire",
+    "mali": "mali",
+    "burkina faso": "burkina faso",
+    "niger": "niger",
+    "togo": "togo",
+    "guinee-bissau": "guinee-bissau",
+    "guinee bissau": "guinee-bissau",
+    "cameroun": "cameroun",
+    "gabon": "gabon",
+    "congo": "congo",
+    "congo-brazzaville": "congo",  # Alias
+    "congo brazzaville": "congo",  # Alias
+    "tchad": "tchad",
+    "rca": "rca",
+    "centrafrique": "rca",
+    "guinee equatoriale": "guinee equatoriale",
+    "mauritanie": "mauritanie",
 }
 
 def match_country_to_db(country_name: str, db_pays_map: dict) -> str:
@@ -418,6 +420,54 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
         aff["completions_pays"] = completions_pays_map.get(aff_id, [])
         aff["quotas"] = quotas_map.get(enquete_id, [])
         aff["completions_segments"] = segments_map.get(aff_id, [])
+
+        # Calculer les completions valides pour cet enqueteur
+        # Les completions valides = min(completions_enqueteur, part proportionnelle du quota)
+        enqueteur_segments = segments_map.get(aff_id, [])
+        enquete_quotas = quotas_map.get(enquete_id, [])
+
+        # Creer un mapping segment_value normalise -> quota info
+        quota_info = {}
+        for q in enquete_quotas:
+            seg_val = q.get("segment_value", "")
+            if seg_val:
+                # Normaliser le nom du segment pour la comparaison
+                seg_val_norm = normalize_country_name(seg_val)
+                quota_info[seg_val_norm] = {
+                    "objectif": q.get("objectif", 0) or 0,
+                    "completions_globales": q.get("completions", 0) or 0
+                }
+
+        # Calculer completions valides par segment
+        completions_valides = 0
+        for seg in enqueteur_segments:
+            seg_val = seg.get("segment_value", "")
+            seg_comp = seg.get("completions", 0) or 0
+
+            # Normaliser pour la comparaison
+            seg_val_norm = normalize_country_name(seg_val)
+            # Utiliser le mapping si disponible (ex: congo-brazzaville -> congo)
+            seg_val_norm = PAYS_MAPPING.get(seg_val_norm, seg_val_norm)
+
+            if seg_val_norm in quota_info:
+                objectif = quota_info[seg_val_norm]["objectif"]
+                comp_globales = quota_info[seg_val_norm]["completions_globales"]
+
+                if comp_globales > 0 and objectif > 0:
+                    if comp_globales <= objectif:
+                        # Pas de debordement, toutes les completions sont valides
+                        completions_valides += seg_comp
+                    else:
+                        # Debordement: calculer la part proportionnelle
+                        ratio = objectif / comp_globales
+                        completions_valides += int(seg_comp * ratio)
+                else:
+                    completions_valides += seg_comp
+            else:
+                # Segment non trouve dans les quotas = invalide (non classifie)
+                pass
+
+        aff["completions_valides"] = completions_valides
 
         # Generer le lien questionnaire dynamiquement
         enquete = aff.get("enquetes", {})
