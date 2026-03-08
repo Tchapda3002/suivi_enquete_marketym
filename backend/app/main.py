@@ -341,8 +341,9 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
     if not affectations.data:
         return {**enq, "affectations": []}
 
-    # Collecter tous les IDs d'affectations pour requetes batch
+    # Collecter tous les IDs d'affectations et enquetes pour requetes batch
     aff_ids = [aff["id"] for aff in affectations.data]
+    enquete_ids = [aff["enquete_id"] for aff in affectations.data if aff.get("enquete_id")]
 
     # Charger toutes les donnees en batch (3 requetes au lieu de N*3)
     all_completions_pays = sb.table("completions_pays")\
@@ -350,13 +351,29 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
         .in_("affectation_id", aff_ids)\
         .execute()
 
+    # Charger les quotas via les segmentations (lies a enquete_id)
     all_quotas = []
     try:
-        quotas_res = sb.table("quotas")\
-            .select("*")\
-            .in_("affectation_id", aff_ids)\
-            .execute()
-        all_quotas = quotas_res.data
+        if enquete_ids:
+            # D'abord recuperer les segmentations des enquetes
+            segmentations = sb.table("segmentations")\
+                .select("id, enquete_id")\
+                .in_("enquete_id", enquete_ids)\
+                .execute()
+            seg_ids = [s["id"] for s in segmentations.data]
+
+            # Mapper segmentation_id -> enquete_id
+            seg_to_enquete = {s["id"]: s["enquete_id"] for s in segmentations.data}
+
+            if seg_ids:
+                quotas_res = sb.table("quotas")\
+                    .select("*")\
+                    .in_("segmentation_id", seg_ids)\
+                    .execute()
+                # Ajouter enquete_id a chaque quota
+                for q in quotas_res.data:
+                    q["enquete_id"] = seg_to_enquete.get(q.get("segmentation_id"))
+                all_quotas = quotas_res.data
     except:
         pass
 
@@ -378,12 +395,14 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
             completions_pays_map[aid] = []
         completions_pays_map[aid].append(cp)
 
+    # Mapper quotas par enquete_id (car quotas sont lies aux segmentations, pas aux affectations)
     quotas_map = {}
     for q in all_quotas:
-        aid = q["affectation_id"]
-        if aid not in quotas_map:
-            quotas_map[aid] = []
-        quotas_map[aid].append(q)
+        eid = q.get("enquete_id")
+        if eid and eid not in quotas_map:
+            quotas_map[eid] = []
+        if eid:
+            quotas_map[eid].append(q)
 
     segments_map = {}
     for s in all_completions_segments:
@@ -395,8 +414,9 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
     # Assembler les resultats
     for aff in affectations.data:
         aff_id = aff["id"]
+        enquete_id = aff.get("enquete_id")
         aff["completions_pays"] = completions_pays_map.get(aff_id, [])
-        aff["quotas"] = quotas_map.get(aff_id, [])
+        aff["quotas"] = quotas_map.get(enquete_id, [])
         aff["completions_segments"] = segments_map.get(aff_id, [])
 
         # Generer le lien questionnaire dynamiquement
