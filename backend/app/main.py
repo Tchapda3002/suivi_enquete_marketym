@@ -1072,32 +1072,37 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
     # Agreger les completions de TOUTES les affectations de cette enquete
     enquete_id = aff_info.data[0].get("enquete_id") if aff_info.data else None
     if enquete_id:
-        # Recuperer toutes les affectations de cette enquete
-        all_affs = sb.table("affectations").select("id").eq("enquete_id", enquete_id).execute()
-        all_aff_ids = [a["id"] for a in all_affs.data]
+        # Recuperer les segmentations de cette enquete specifiquement
+        segmentations = sb.table("segmentations").select("id").eq("enquete_id", enquete_id).execute()
+        seg_ids = [s["id"] for s in segmentations.data]
 
-        if all_aff_ids:
-            # Recuperer toutes les completions_segments de ces affectations
-            all_segments = sb.table("completions_segments")\
-                .select("segment_value, completions")\
-                .in_("affectation_id", all_aff_ids)\
-                .execute()
+        if seg_ids:
+            # Recuperer toutes les affectations de cette enquete
+            all_affs = sb.table("affectations").select("id").eq("enquete_id", enquete_id).execute()
+            all_aff_ids = [a["id"] for a in all_affs.data]
 
-            # Agreger par segment_value
-            global_counts = {}
-            for s in all_segments.data:
-                seg = s.get("segment_value", "")
-                count = s.get("completions", 0) or 0
-                if seg:
-                    global_counts[seg] = global_counts.get(seg, 0) + count
+            if all_aff_ids:
+                # Recuperer toutes les completions_segments de ces affectations
+                all_segments = sb.table("completions_segments")\
+                    .select("segment_value, completions")\
+                    .in_("affectation_id", all_aff_ids)\
+                    .execute()
 
-            # Mettre a jour les quotas globaux
-            for segment_value, total_completions in global_counts.items():
-                # Chercher le quota correspondant (via segmentation de l'enquete)
-                sb.table("quotas").update({
-                    "completions": total_completions,
-                    "updated_at": datetime.utcnow().isoformat()
-                }).eq("segment_value", segment_value).is_("affectation_id", "null").execute()
+                # Agreger par segment_value
+                global_counts = {}
+                for s in all_segments.data:
+                    seg = s.get("segment_value", "")
+                    count = s.get("completions", 0) or 0
+                    if seg:
+                        global_counts[seg] = global_counts.get(seg, 0) + count
+
+                # Mettre a jour les quotas globaux UNIQUEMENT pour les segmentations de cette enquete
+                for segment_value, total_completions in global_counts.items():
+                    # Mettre a jour les quotas qui appartiennent aux segmentations de cette enquete
+                    sb.table("quotas").update({
+                        "completions": total_completions,
+                        "updated_at": datetime.utcnow().isoformat()
+                    }).in_("segmentation_id", seg_ids).eq("segment_value", segment_value).is_("affectation_id", "null").execute()
 
     # Note: L'historique est maintenant basé sur les timestamps QuestionPro directement
     # Plus besoin d'enregistrer dans historique_completions
