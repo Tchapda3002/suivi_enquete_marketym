@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getEnqueteur } from '../lib/api'
-import { Card, Badge, ProgressBar, CopyButton, Spinner, Avatar, Button } from '../components/ui'
+import { getEnqueteur, syncEnqueteur, getEnqueteurSegmentations, getHistoriqueEnqueteur, authRequestProfileOTP, authUpdateProfile } from '../lib/api'
+import { Card, Badge, ProgressBar, CopyButton, Spinner, Avatar, Button, LineChart, Input, Modal } from '../components/ui'
 
 const STATUT_CONFIG = {
   en_cours:  { label: 'En cours',  variant: 'info' },
@@ -13,11 +13,14 @@ export default function Dashboard() {
   const nav = useNavigate()
   const [enq, setEnq] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [selectedId, setSelectedId] = useState(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [activeTab, setActiveTab] = useState('dashboard')
+  const [selectedEnquete, setSelectedEnquete] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+  const [segmentations, setSegmentations] = useState([])
+  const [historique, setHistorique] = useState([])
 
   useEffect(() => {
-    const stored = sessionStorage.getItem('enqueteur')
+    const stored = sessionStorage.getItem('user')
     if (!stored) return nav('/')
     const data = JSON.parse(stored)
     setEnq(data)
@@ -25,9 +28,15 @@ export default function Dashboard() {
 
     const refresh = async () => {
       try {
-        const fresh = await getEnqueteur(data.id)
+        const [fresh, segs, hist] = await Promise.all([
+          getEnqueteur(data.id),
+          getEnqueteurSegmentations(data.id),
+          getHistoriqueEnqueteur(data.id, 30)
+        ])
         setEnq(fresh)
-        sessionStorage.setItem('enqueteur', JSON.stringify(fresh))
+        setSegmentations(segs || [])
+        setHistorique(hist || [])
+        sessionStorage.setItem('user', JSON.stringify(fresh))
       } catch {}
     }
     refresh()
@@ -35,11 +44,19 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [nav])
 
-  useEffect(() => {
-    if (enq?.affectations?.length > 0 && !selectedId) {
-      setSelectedId(enq.affectations[0].id)
+  async function handleSync() {
+    setSyncing(true)
+    try {
+      await syncEnqueteur(enq.id)
+      const fresh = await getEnqueteur(enq.id)
+      setEnq(fresh)
+      sessionStorage.setItem('user', JSON.stringify(fresh))
+    } catch (err) {
+      console.error('Erreur sync:', err)
+    } finally {
+      setSyncing(false)
     }
-  }, [enq, selectedId])
+  }
 
   if (loading || !enq) {
     return (
@@ -50,170 +67,127 @@ export default function Dashboard() {
   }
 
   const affectations = enq.affectations || []
-  const selectedAff = affectations.find(a => a.id === selectedId)
   const totalCompletions = affectations.reduce((s, a) => s + (a.completions_total || 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
+  const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
+  const totalInvalides = affectations.reduce((s, a) => s + (a.invalid_total || 0), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
+  const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
 
   return (
-    <div className="min-h-screen flex bg-[#F9FAFB]">
-      {/* ══════════════════════════════════════════════════════════════════════
-          SIDEBAR
-          ══════════════════════════════════════════════════════════════════════ */}
-      <aside
-        className={`
-          flex-shrink-0 flex flex-col border-r border-[#E5E7EB] bg-white
-          transition-all duration-200
-          ${sidebarCollapsed ? 'w-[68px]' : 'w-[260px]'}
-        `}
-      >
-        {/* Header */}
-        <div className="p-4 border-b border-[#E5E7EB]">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#059669] flex items-center justify-center flex-shrink-0">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M3 3v18h18" />
-                <path d="M18 9l-5 5-4-4-3 3" />
-              </svg>
-            </div>
-            {!sidebarCollapsed && (
-              <span className="text-[#111827] font-semibold text-sm">Marketym by H&C</span>
-            )}
-          </div>
-        </div>
-
-        {/* User info */}
-        <div className="p-4 border-b border-[#E5E7EB]">
-          <div className="flex items-center gap-3">
-            <Avatar name={`${enq.prenom} ${enq.nom}`} size="md" />
-            {!sidebarCollapsed && (
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-[#111827] truncate">
-                  {enq.prenom} {enq.nom}
-                </p>
-                <p className="text-xs font-mono text-[#6B7280]">{enq.identifiant}</p>
+    <div className="min-h-screen bg-[#F9FAFB]">
+      {/* Header */}
+      <header className="bg-white border-b border-[#E5E7EB] sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="flex items-center justify-between h-16">
+            {/* Logo + User */}
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-[#059669] flex items-center justify-center">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                    <path d="M3 3v18h18" />
+                    <path d="M18 9l-5 5-4-4-3 3" />
+                  </svg>
+                </div>
+                <span className="text-[#111827] font-semibold hidden sm:block">Marketym</span>
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* Global Progress */}
-        {!sidebarCollapsed && (
-          <div className="p-4 border-b border-[#E5E7EB]">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-[#6B7280]">Progression globale</span>
-              <span className="text-sm font-semibold text-[#059669]">{globalPct}%</span>
+              <div className="h-6 w-px bg-[#E5E7EB] hidden sm:block" />
+              <div className="flex items-center gap-2">
+                <Avatar name={`${enq.prenom} ${enq.nom}`} size="sm" />
+                <div className="hidden sm:block">
+                  <p className="text-sm font-medium text-[#111827]">{enq.prenom} {enq.nom}</p>
+                  <p className="text-xs text-[#6B7280]">{enq.identifiant}</p>
+                </div>
+              </div>
             </div>
-            <ProgressBar value={totalCompletions} max={totalObjectif} size="sm" />
-            <p className="text-xs text-[#9CA3AF] mt-2">
-              {totalCompletions} / {totalObjectif} completions
-            </p>
-          </div>
-        )}
 
-        {/* Enquetes List */}
-        <div className="flex-1 overflow-y-auto py-2">
-          {!sidebarCollapsed && (
-            <p className="px-4 py-2 text-[10px] font-semibold text-[#9CA3AF] uppercase tracking-wider">
-              Mes enquetes
-            </p>
-          )}
-          {affectations.map((aff, index) => {
-            const enquete = aff.enquetes || {}
-            const isSelected = aff.id === selectedId
-            const pct = Math.round((aff.completions_total / Math.max(aff.objectif_total, 1)) * 100)
-
-            return (
+            {/* Actions */}
+            <div className="flex items-center gap-2">
               <button
-                key={aff.id}
-                onClick={() => setSelectedId(aff.id)}
-                className={`
-                  w-full text-left transition-all duration-150 animate-slideIn
-                  ${sidebarCollapsed ? 'px-3 py-3' : 'px-4 py-3'}
-                  ${isSelected
-                    ? 'bg-[#F3F4F6] border-l-2 border-l-[#059669]'
-                    : 'border-l-2 border-l-transparent hover:bg-[#F9FAFB]'
-                  }
-                `}
-                style={{ animationDelay: `${index * 30}ms` }}
+                onClick={handleSync}
+                disabled={syncing}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  syncing
+                    ? 'bg-[#ECFDF5] text-[#059669]'
+                    : 'text-[#059669] hover:bg-[#ECFDF5]'
+                }`}
               >
-                {sidebarCollapsed ? (
-                  <div className={`
-                    w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold mx-auto
-                    ${isSelected ? 'bg-[#059669] text-white' : 'bg-[#F3F4F6] text-[#6B7280]'}
-                  `}>
-                    {enquete.code?.slice(0, 2)}
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#F3F4F6] text-[#6B7280]">
-                        {enquete.code}
-                      </span>
-                      <span className={`text-xs font-semibold ${pct >= 100 ? 'text-[#059669]' : 'text-[#6B7280]'}`}>
-                        {pct}%
-                      </span>
-                    </div>
-                    <p className={`text-sm font-medium truncate ${isSelected ? 'text-[#111827]' : 'text-[#4B5563]'}`}>
-                      {enquete.nom}
-                    </p>
-                    <div className="mt-2">
-                      <ProgressBar value={aff.completions_total} max={aff.objectif_total} size="sm" />
-                    </div>
-                  </>
-                )}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Footer */}
-        <div className="p-3 border-t border-[#E5E7EB] space-y-1">
-          <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="w-full p-2 rounded-lg flex items-center justify-center gap-2 text-[#6B7280] hover:bg-[#F3F4F6] transition-colors"
-          >
-            <svg
-              className={`w-4 h-4 transition-transform duration-200 ${sidebarCollapsed ? 'rotate-180' : ''}`}
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            >
-              <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            {!sidebarCollapsed && <span className="text-xs">Reduire</span>}
-          </button>
-
-          <button
-            onClick={() => { sessionStorage.clear(); nav('/') }}
-            className="w-full p-2 rounded-lg flex items-center justify-center gap-2 text-[#6B7280] hover:text-[#DC2626] hover:bg-[#FEF2F2] transition-colors"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-            {!sidebarCollapsed && <span className="text-xs">Deconnexion</span>}
-          </button>
-        </div>
-      </aside>
-
-      {/* ══════════════════════════════════════════════════════════════════════
-          MAIN CONTENT
-          ══════════════════════════════════════════════════════════════════════ */}
-      <main className="flex-1 overflow-y-auto flex justify-center">
-        {selectedAff ? (
-          <EnqueteDetail affectation={selectedAff} />
-        ) : (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-[#F3F4F6] flex items-center justify-center mx-auto mb-4">
-                <svg className="w-7 h-7 text-[#9CA3AF]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
-                  <rect x="9" y="3" width="6" height="4" rx="2" />
+                <svg className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 4v6h-6M1 20v-6h6" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-              </div>
-              <p className="text-[#6B7280]">Selectionnez une enquete</p>
+                <span className="hidden sm:inline">{syncing ? 'Sync...' : 'Synchroniser'}</span>
+              </button>
+              <button
+                onClick={() => { sessionStorage.clear(); nav('/') }}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-[#6B7280] hover:text-[#DC2626] hover:bg-[#FEF2F2] transition-colors"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                <span className="hidden sm:inline">Deconnexion</span>
+              </button>
             </div>
           </div>
+
+          {/* Tabs */}
+          <div className="flex gap-1">
+            <TabButton
+              active={activeTab === 'dashboard'}
+              onClick={() => { setActiveTab('dashboard'); setSelectedEnquete(null) }}
+              icon={<DashboardIcon />}
+              label="Tableau de bord"
+            />
+            <TabButton
+              active={activeTab === 'enquetes'}
+              onClick={() => { setActiveTab('enquetes'); setSelectedEnquete(null) }}
+              icon={<ClipboardIcon />}
+              label="Mes enquetes"
+              badge={affectations.length}
+            />
+            <TabButton
+              active={activeTab === 'profil'}
+              onClick={() => { setActiveTab('profil'); setSelectedEnquete(null) }}
+              icon={<UserIcon />}
+              label="Mon profil"
+            />
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-6xl mx-auto px-6 py-6">
+        {activeTab === 'dashboard' && (
+          <DashboardTab
+            affectations={affectations}
+            totalCompletions={totalCompletions}
+            totalObjectif={totalObjectif}
+            totalClics={totalClics}
+            totalInvalides={totalInvalides}
+            globalPct={globalPct}
+            conversionRate={conversionRate}
+            segmentations={segmentations}
+            historique={historique}
+            onSelectEnquete={(aff) => { setSelectedEnquete(aff); setActiveTab('enquetes') }}
+          />
+        )}
+        {activeTab === 'enquetes' && (
+          selectedEnquete ? (
+            <EnqueteDetail
+              affectation={selectedEnquete}
+              onBack={() => setSelectedEnquete(null)}
+            />
+          ) : (
+            <EnquetesTab
+              affectations={affectations}
+              onSelect={setSelectedEnquete}
+            />
+          )
+        )}
+        {activeTab === 'profil' && (
+          <ProfilTab enqueteur={enq} onUpdate={setEnq} />
         )}
       </main>
     </div>
@@ -221,10 +195,318 @@ export default function Dashboard() {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   ENQUETE DETAIL COMPONENT
+   ICONS
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function EnqueteDetail({ affectation }) {
+function DashboardIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="3" y="3" width="7" height="7" />
+      <rect x="14" y="3" width="7" height="7" />
+      <rect x="14" y="14" width="7" height="7" />
+      <rect x="3" y="14" width="7" height="7" />
+    </svg>
+  )
+}
+
+function ClipboardIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
+      <rect x="9" y="3" width="6" height="4" rx="2" />
+    </svg>
+  )
+}
+
+function UserIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  )
+}
+
+function BackIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M19 12H5M12 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   TAB BUTTON
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function TabButton({ active, onClick, icon, label, badge }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+        active
+          ? 'border-[#059669] text-[#059669]'
+          : 'border-transparent text-[#6B7280] hover:text-[#111827] hover:border-[#D1D5DB]'
+      }`}
+    >
+      {icon}
+      <span className="hidden sm:inline">{label}</span>
+      {badge !== undefined && (
+        <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+          active ? 'bg-[#ECFDF5] text-[#059669]' : 'bg-[#F3F4F6] text-[#6B7280]'
+        }`}>{badge}</span>
+      )}
+    </button>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DASHBOARD TAB
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, totalInvalides, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
+  const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
+
+  return (
+    <div className="animate-fadeIn">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-[#111827]">Tableau de bord</h1>
+        <p className="text-sm text-[#6B7280]">Vue d'ensemble de votre progression</p>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <KPICard label="Completions" value={totalCompletions} subValue={`/ ${totalObjectif}`} color="#059669" />
+        <KPICard label="Objectif" value={totalObjectif} subValue="reponses" color="#2563EB" />
+        <KPICard label="Invalides" value={totalInvalides} subValue="reponses" color="#DC2626" />
+        <KPICard label="Clics" value={totalClics} subValue="ouvertures" color="#7C3AED" />
+        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
+      </div>
+
+      {/* Progression globale + Courbe */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-[#111827]">Progression globale</h3>
+            <span className="text-2xl font-bold text-[#059669]">{globalPct}%</span>
+          </div>
+          <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden mb-2">
+            <div
+              className="h-full rounded-full bg-[#059669] transition-all duration-700"
+              style={{ width: `${Math.min(globalPct, 100)}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-xs text-[#6B7280]">
+            <span>{totalCompletions} completions</span>
+            <span>Objectif: {totalObjectif}</span>
+          </div>
+        </Card>
+
+        {/* Courbe d'evolution */}
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-[#111827]">Evolution (30 jours)</h3>
+            {historique && historique.length > 0 && (
+              <span className="text-xs text-[#6B7280]">
+                {historique.length} jours
+              </span>
+            )}
+          </div>
+          <LineChart data={historique} height={100} color="#059669" />
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Mes enquetes */}
+        <Card className="p-6">
+          <h3 className="font-semibold text-[#111827] mb-4">Mes enquetes</h3>
+          <div className="space-y-4">
+            {affectations.map(aff => {
+              const enquete = aff.enquetes || {}
+              const pct = Math.round((aff.completions_total / Math.max(aff.objectif_total, 1)) * 100)
+              return (
+                <button
+                  key={aff.id}
+                  onClick={() => onSelectEnquete(aff)}
+                  className="w-full text-left p-3 rounded-lg hover:bg-[#F9FAFB] transition-colors"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[#F3F4F6] text-[#6B7280]">
+                        {enquete.code}
+                      </span>
+                      <span className="text-sm font-medium text-[#111827]">{enquete.nom}</span>
+                    </div>
+                    <span className="text-sm font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
+                  </div>
+                  <ProgressBar value={aff.completions_total} max={aff.objectif_total} size="sm" />
+                  <div className="flex justify-between mt-1 text-xs text-[#9CA3AF]">
+                    <span>{aff.completions_total} / {aff.objectif_total}</span>
+                    <span>{aff.clics} clics</span>
+                  </div>
+                </button>
+              )
+            })}
+            {affectations.length === 0 && (
+              <p className="text-center text-[#9CA3AF] py-4">Aucune enquete assignee</p>
+            )}
+          </div>
+        </Card>
+
+        {/* Segmentations dynamiques */}
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-[#111827]">Segmentations</h3>
+            {segmentations && segmentations.length > 1 && (
+              <div className="flex gap-1">
+                {segmentations.map(seg => (
+                  <button
+                    key={seg.enquete_id}
+                    onClick={() => setSelectedSegEnquete(selectedSegEnquete === seg.enquete_id ? null : seg.enquete_id)}
+                    className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                      selectedSegEnquete === seg.enquete_id || (selectedSegEnquete === null && segmentations[0]?.enquete_id === seg.enquete_id)
+                        ? 'bg-[#059669] text-white'
+                        : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+                    }`}
+                  >
+                    {seg.enquete_code}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-3 max-h-[300px] overflow-y-auto">
+            {segmentations && segmentations.length > 0 ? (
+              (() => {
+                const currentSeg = segmentations.find(s => s.enquete_id === selectedSegEnquete) || segmentations[0]
+                return currentSeg?.segmentations?.map(seg => (
+                  <div key={seg.id}>
+                    <p className="text-xs font-medium text-[#6B7280] mb-2">{seg.nom}</p>
+                    {seg.quotas.map((q, i) => {
+                      const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
+                      const isComplete = pct >= 100
+                      return (
+                        <div key={i} className={`p-2 mb-1 rounded-lg ${isComplete ? 'bg-[#ECFDF5]' : 'bg-[#F9FAFB]'}`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className={`font-medium text-xs ${isComplete ? 'text-[#059669]' : 'text-[#111827]'}`}>
+                              {q.segment_value}
+                              {isComplete && (
+                                <svg className="w-3 h-3 inline ml-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              )}
+                            </span>
+                            <span className="text-xs font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
+                          </div>
+                          <div className="h-1 bg-[#E5E7EB] rounded-full overflow-hidden">
+                            <div className="h-full rounded-full bg-[#059669]" style={{ width: `${Math.min(pct, 100)}%` }} />
+                          </div>
+                          <div className="flex justify-between mt-1 text-[9px] text-[#6B7280]">
+                            <span>{q.completions || 0}</span>
+                            <span>/ {q.objectif}</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))
+              })()
+            ) : (
+              <p className="text-center text-[#9CA3AF] py-4">Aucune segmentation configuree</p>
+            )}
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ENQUETES TAB
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function EnquetesTab({ affectations, onSelect }) {
+  return (
+    <div className="animate-fadeIn">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-[#111827]">Mes enquetes</h1>
+        <p className="text-sm text-[#6B7280]">{affectations.length} enquetes assignees</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {affectations.map(aff => {
+          const enquete = aff.enquetes || {}
+          const status = STATUT_CONFIG[aff.statut] || STATUT_CONFIG.en_cours
+          const pct = Math.round((aff.completions_total / Math.max(aff.objectif_total, 1)) * 100)
+          const conversionRate = aff.clics > 0 ? Math.round((aff.completions_total / aff.clics) * 100) : 0
+
+          return (
+            <Card
+              key={aff.id}
+              className="p-5 hover:shadow-md transition-shadow cursor-pointer"
+              onClick={() => onSelect(aff)}
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-mono px-2 py-1 rounded bg-[#F3F4F6] text-[#6B7280]">
+                      {enquete.code}
+                    </span>
+                    <Badge variant={status.variant} size="sm">{status.label}</Badge>
+                  </div>
+                  <h3 className="text-lg font-semibold text-[#111827]">{enquete.nom}</h3>
+                  <p className="text-sm text-[#6B7280] line-clamp-1">{enquete.cible}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-bold" style={{ color: getProgressColor(pct) }}>{pct}%</p>
+                </div>
+              </div>
+
+              {/* Mini Stats */}
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
+                  <p className="text-lg font-bold text-[#059669]">{aff.completions_total}</p>
+                  <p className="text-[10px] text-[#059669]">Completions</p>
+                </div>
+                <div className="p-2 rounded-lg bg-[#FEF2F2] text-center">
+                  <p className="text-lg font-bold text-[#DC2626]">{aff.invalid_total || 0}</p>
+                  <p className="text-[10px] text-[#DC2626]">Invalides</p>
+                </div>
+                <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
+                  <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
+                  <p className="text-[10px] text-[#7C3AED]">Clics</p>
+                </div>
+                <div className="p-2 rounded-lg bg-[#FFFBEB] text-center">
+                  <p className="text-lg font-bold text-[#D97706]">{conversionRate}%</p>
+                  <p className="text-[10px] text-[#D97706]">Conversion</p>
+                </div>
+              </div>
+
+              <ProgressBar value={aff.completions_total} max={aff.objectif_total} size="md" />
+              <p className="text-xs text-[#9CA3AF] mt-2 text-right">Objectif: {aff.objectif_total}</p>
+            </Card>
+          )
+        })}
+      </div>
+
+      {affectations.length === 0 && (
+        <div className="text-center py-16">
+          <div className="w-16 h-16 rounded-2xl bg-[#F3F4F6] flex items-center justify-center mx-auto mb-4">
+            <ClipboardIcon />
+          </div>
+          <p className="text-[#6B7280]">Aucune enquete assignee</p>
+          <p className="text-sm text-[#9CA3AF] mt-1">Contactez l'administrateur pour etre assigne a une enquete</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ENQUETE DETAIL
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function EnqueteDetail({ affectation, onBack }) {
   const enquete = affectation.enquetes || {}
   const status = STATUT_CONFIG[affectation.statut] || STATUT_CONFIG.en_cours
   const pct = Math.round((affectation.completions_total / Math.max(affectation.objectif_total, 1)) * 100)
@@ -233,58 +515,44 @@ function EnqueteDetail({ affectation }) {
     : 0
 
   return (
-    <div className="w-full p-8 animate-fadeIn">
-      <div className="max-w-5xl mx-auto">
+    <div className="animate-fadeIn">
+      {/* Back button */}
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#111827] mb-4 transition-colors"
+      >
+        <BackIcon />
+        Retour a mes enquetes
+      </button>
+
       {/* Header */}
-      <div className="flex items-start justify-between mb-8">
+      <div className="flex items-start justify-between mb-6">
         <div>
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs font-mono px-2 py-1 rounded bg-[#F3F4F6] text-[#6B7280]">
               {enquete.code}
             </span>
-            <Badge variant={status.variant} dot>
-              {status.label}
-            </Badge>
+            <Badge variant={status.variant} dot>{status.label}</Badge>
           </div>
           <h1 className="text-2xl font-semibold text-[#111827] mb-1">{enquete.nom}</h1>
           <p className="text-[#6B7280]">{enquete.cible}</p>
         </div>
-
         <div className="text-right">
-          <p className="text-4xl font-bold text-[#111827]">{pct}%</p>
+          <p className="text-4xl font-bold" style={{ color: getProgressColor(pct) }}>{pct}%</p>
           <p className="text-sm text-[#9CA3AF]">progression</p>
         </div>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
-        <StatBlock
-          label="Completions"
-          value={affectation.completions_total}
-          subValue={`/ ${affectation.objectif_total}`}
-          color="#059669"
-        />
-        <StatBlock
-          label="Objectif"
-          value={affectation.objectif_total}
-          subValue="reponses"
-          color="#2563EB"
-        />
-        <StatBlock
-          label="Clics"
-          value={affectation.clics || 0}
-          subValue="ouvertures"
-          color="#7C3AED"
-        />
-        <StatBlock
-          label="Conversion"
-          value={`${conversionRate}%`}
-          subValue="taux"
-          color="#D97706"
-        />
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <KPICard label="Completions" value={affectation.completions_total} subValue={`/ ${affectation.objectif_total}`} color="#059669" />
+        <KPICard label="Objectif" value={affectation.objectif_total} subValue="reponses" color="#2563EB" />
+        <KPICard label="Invalides" value={affectation.invalid_total || 0} subValue="reponses" color="#DC2626" />
+        <KPICard label="Clics" value={affectation.clics || 0} subValue="ouvertures" color="#7C3AED" />
+        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
       </div>
 
-      {/* Progress Section */}
+      {/* Progress */}
       <Card className="p-5 mb-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-[#111827]">Progression globale</h3>
@@ -294,18 +562,14 @@ function EnqueteDetail({ affectation }) {
         </div>
         <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden">
           <div
-            className="h-full rounded-full transition-all duration-700 ease-out"
-            style={{
-              width: `${Math.min(pct, 100)}%`,
-              backgroundColor: '#059669',
-            }}
+            className="h-full rounded-full transition-all duration-700 ease-out bg-[#059669]"
+            style={{ width: `${Math.min(pct, 100)}%` }}
           />
         </div>
       </Card>
 
-      {/* Two Column Layout */}
-      <div className="grid grid-cols-2 gap-6">
-        {/* Questionnaire Link */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Lien */}
         <Card className="p-5">
           <h3 className="text-sm font-semibold text-[#111827] mb-4 flex items-center gap-2">
             <svg className="w-4 h-4 text-[#059669]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -314,14 +578,12 @@ function EnqueteDetail({ affectation }) {
             </svg>
             Lien de collecte
           </h3>
-
           <div className="flex items-center gap-2 p-3 bg-[#F9FAFB] border border-[#E5E7EB] rounded-lg mb-4">
             <p className="flex-1 text-xs font-mono text-[#4B5563] truncate">
               {affectation.lien_questionnaire}
             </p>
             <CopyButton text={affectation.lien_questionnaire} />
           </div>
-
           <Button
             variant="secondary"
             fullWidth
@@ -336,37 +598,44 @@ function EnqueteDetail({ affectation }) {
           </Button>
         </Card>
 
-        {/* Country Progress */}
+        {/* Segmentations */}
         <Card className="p-5">
           <h3 className="text-sm font-semibold text-[#111827] mb-4 flex items-center gap-2">
             <svg className="w-4 h-4 text-[#059669]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="2" y1="12" x2="22" y2="12" />
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+              <line x1="12" y1="22.08" x2="12" y2="12" />
             </svg>
-            Progression par pays
+            Progression par segment
           </h3>
-
           <div className="space-y-2.5 max-h-[200px] overflow-y-auto">
-            {affectation.completions_pays?.length > 0 ? (
-              [...affectation.completions_pays]
+            {affectation.quotas?.length > 0 ? (
+              [...affectation.quotas]
+                .filter(q => q.completions > 0 || q.objectif > 0)
                 .sort((a, b) => {
                   const pctA = a.completions / Math.max(a.objectif, 1)
                   const pctB = b.completions / Math.max(b.objectif, 1)
                   return pctB - pctA
                 })
-                .map((cp, i) => (
-                  <CountryRow
-                    key={i}
-                    pays={cp.pays?.nom || 'Inconnu'}
-                    completions={cp.completions}
-                    objectif={cp.objectif}
-                  />
-                ))
+                .map((q, i) => {
+                  const segPct = Math.min(Math.round((q.completions / Math.max(q.objectif, 1)) * 100), 100)
+                  const isComplete = segPct >= 100
+                  return (
+                    <div key={i} className="flex items-center gap-3">
+                      <span className={`w-24 text-sm truncate ${isComplete ? 'text-[#059669] font-medium' : 'text-[#4B5563]'}`} title={q.segment_value}>
+                        {q.segment_value || 'Inconnu'}
+                      </span>
+                      <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-[#059669]" style={{ width: `${segPct}%` }} />
+                      </div>
+                      <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">
+                        {q.completions}/{q.objectif}
+                      </span>
+                    </div>
+                  )
+                })
             ) : (
-              <p className="text-sm text-[#9CA3AF] text-center py-6">
-                Aucune donnee disponible
-              </p>
+              <p className="text-sm text-[#9CA3AF] text-center py-6">Aucun quota defini</p>
             )}
           </div>
         </Card>
@@ -382,15 +651,299 @@ function EnqueteDetail({ affectation }) {
               <line x1="12" y1="8" x2="12.01" y2="8" />
             </svg>
             <div>
-              <p className="text-xs font-semibold text-[#92400E] mb-1">
-                Message de l'administrateur
-              </p>
+              <p className="text-xs font-semibold text-[#92400E] mb-1">Message de l'administrateur</p>
               <p className="text-sm text-[#78350F]">{affectation.commentaire_admin}</p>
             </div>
           </div>
         </Card>
       )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   PROFIL TAB
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function ProfilTab({ enqueteur, onUpdate }) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [showOtpModal, setShowOtpModal] = useState(false)
+  const [otpCode, setOtpCode] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  // Form state
+  const [formData, setFormData] = useState({
+    nom: enqueteur.nom || '',
+    prenom: enqueteur.prenom || '',
+    email: enqueteur.email || '',
+    telephone: enqueteur.telephone || '',
+    reseau_mobile: enqueteur.reseau_mobile || '',
+    mode_remuneration: enqueteur.mode_remuneration || ''
+  })
+
+  const affectations = enqueteur.affectations || []
+  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_total || 0), 0)
+  const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
+  const totalInvalides = affectations.reduce((s, a) => s + (a.invalid_total || 0), 0)
+
+  const handleEditClick = async () => {
+    setError('')
+    setLoading(true)
+    try {
+      await authRequestProfileOTP()
+      setShowOtpModal(true)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Erreur lors de l\'envoi du code')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleVerifyAndSave = async () => {
+    if (!otpCode || otpCode.length < 6) {
+      setError('Veuillez entrer le code a 6 chiffres')
+      return
+    }
+
+    setError('')
+    setLoading(true)
+    try {
+      const result = await authUpdateProfile(otpCode, formData)
+      setSuccess('Profil mis a jour avec succes')
+      setShowOtpModal(false)
+      setIsEditing(false)
+      setOtpCode('')
+
+      // Mettre a jour le session storage et notifier le parent
+      if (result.user && onUpdate) {
+        const stored = JSON.parse(sessionStorage.getItem('user') || '{}')
+        const updated = { ...stored, ...result.user }
+        sessionStorage.setItem('user', JSON.stringify(updated))
+        onUpdate(updated)
+      }
+
+      setTimeout(() => setSuccess(''), 3000)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Code incorrect ou erreur')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCancel = () => {
+    setIsEditing(false)
+    setFormData({
+      nom: enqueteur.nom || '',
+      prenom: enqueteur.prenom || '',
+      email: enqueteur.email || '',
+      telephone: enqueteur.telephone || '',
+      reseau_mobile: enqueteur.reseau_mobile || '',
+      mode_remuneration: enqueteur.mode_remuneration || ''
+    })
+    setError('')
+  }
+
+  return (
+    <div className="animate-fadeIn max-w-2xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-[#111827]">Mon profil</h1>
+          <p className="text-sm text-[#6B7280]">Vos informations personnelles</p>
+        </div>
+        {!isEditing && (
+          <Button onClick={() => setIsEditing(true)} variant="secondary" size="sm">
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+            </svg>
+            Modifier
+          </Button>
+        )}
       </div>
+
+      {error && (
+        <div className="mb-4 p-3 bg-[#FEF2F2] border border-[#FECACA] rounded-lg text-sm text-[#DC2626]">
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="mb-4 p-3 bg-[#ECFDF5] border border-[#A7F3D0] rounded-lg text-sm text-[#059669]">
+          {success}
+        </div>
+      )}
+
+      {/* Avatar + Name */}
+      <Card className="p-6 mb-6">
+        <div className="flex items-center gap-4 mb-6">
+          <Avatar name={`${enqueteur.prenom} ${enqueteur.nom}`} size="lg" />
+          <div>
+            <h2 className="text-xl font-semibold text-[#111827]">{enqueteur.prenom} {enqueteur.nom}</h2>
+            <p className="text-sm font-mono text-[#6B7280]">{enqueteur.identifiant}</p>
+            <Badge variant="success" size="sm" className="mt-2">Actif</Badge>
+          </div>
+        </div>
+
+        {isEditing ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Prenom"
+                value={formData.prenom}
+                onChange={(e) => setFormData({ ...formData, prenom: e.target.value })}
+              />
+              <Input
+                label="Nom"
+                value={formData.nom}
+                onChange={(e) => setFormData({ ...formData, nom: e.target.value })}
+              />
+            </div>
+            <Input
+              label="Email"
+              type="email"
+              value={formData.email}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            />
+            <Input
+              label="Telephone"
+              value={formData.telephone}
+              onChange={(e) => setFormData({ ...formData, telephone: e.target.value })}
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-[#374151]">Reseau mobile</label>
+                <select
+                  value={formData.reseau_mobile}
+                  onChange={(e) => setFormData({ ...formData, reseau_mobile: e.target.value })}
+                  className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2.5 text-sm text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#059669] focus:border-transparent"
+                >
+                  <option value="">-- Selectionner --</option>
+                  <option value="wave">Wave</option>
+                  <option value="orange_money">Orange Money</option>
+                  <option value="free_money">Free Money</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-[#374151]">Mode de remuneration</label>
+                <select
+                  value={formData.mode_remuneration}
+                  onChange={(e) => setFormData({ ...formData, mode_remuneration: e.target.value })}
+                  className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2.5 text-sm text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#059669] focus:border-transparent"
+                >
+                  <option value="">-- Selectionner --</option>
+                  <option value="virement">Virement</option>
+                  <option value="espece">Espece</option>
+                  <option value="espece_virement">Espece + Virement</option>
+                  <option value="cheque">Cheque</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <Button onClick={handleEditClick} loading={loading}>
+                Enregistrer les modifications
+              </Button>
+              <Button onClick={handleCancel} variant="secondary">
+                Annuler
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs text-[#6B7280] mb-1">Email</p>
+              <p className="text-sm font-medium text-[#111827]">{enqueteur.email || '---'}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-xs text-[#6B7280] mb-1">Telephone</p>
+                <p className="text-sm font-medium text-[#111827]">{enqueteur.telephone || '---'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-[#6B7280] mb-1">Reseau mobile</p>
+                <p className="text-sm font-medium text-[#111827]">
+                  {enqueteur.reseau_mobile === 'wave' ? 'Wave' :
+                   enqueteur.reseau_mobile === 'orange_money' ? 'Orange Money' :
+                   enqueteur.reseau_mobile === 'free_money' ? 'Free Money' : '---'}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-[#6B7280] mb-1">Mode de remuneration</p>
+                <p className="text-sm font-medium text-[#111827]">
+                  {enqueteur.mode_remuneration === 'virement' ? 'Virement' :
+                   enqueteur.mode_remuneration === 'espece' ? 'Espece' :
+                   enqueteur.mode_remuneration === 'espece_virement' ? 'Espece + Virement' :
+                   enqueteur.mode_remuneration === 'cheque' ? 'Cheque' : '---'}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-[#6B7280] mb-1">Membre depuis</p>
+                <p className="text-sm font-medium text-[#111827]">
+                  {enqueteur.created_at ? new Date(enqueteur.created_at).toLocaleDateString('fr-FR') : '---'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Stats */}
+      <Card className="p-6">
+        <h3 className="font-semibold text-[#111827] mb-4">Statistiques</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="p-4 rounded-xl bg-[#EFF6FF] text-center">
+            <p className="text-2xl font-bold text-[#2563EB]">{affectations.length}</p>
+            <p className="text-xs text-[#2563EB]">Enquetes</p>
+          </div>
+          <div className="p-4 rounded-xl bg-[#ECFDF5] text-center">
+            <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
+            <p className="text-xs text-[#059669]">Completions</p>
+          </div>
+          <div className="p-4 rounded-xl bg-[#FEF2F2] text-center">
+            <p className="text-2xl font-bold text-[#DC2626]">{totalInvalides}</p>
+            <p className="text-xs text-[#DC2626]">Invalides</p>
+          </div>
+          <div className="p-4 rounded-xl bg-[#F5F3FF] text-center">
+            <p className="text-2xl font-bold text-[#7C3AED]">{totalObjectif}</p>
+            <p className="text-xs text-[#7C3AED]">Objectif total</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Modal OTP */}
+      <Modal isOpen={showOtpModal} onClose={() => { setShowOtpModal(false); setOtpCode(''); setError(''); }} title="Verification requise">
+        <div className="space-y-4">
+          <p className="text-sm text-[#6B7280]">
+            Un code de verification a ete envoye a votre adresse email <strong>{enqueteur.email}</strong>.
+            Entrez ce code pour confirmer les modifications.
+          </p>
+
+          {error && (
+            <div className="p-3 bg-[#FEF2F2] border border-[#FECACA] rounded-lg text-sm text-[#DC2626]">
+              {error}
+            </div>
+          )}
+
+          <Input
+            label="Code de verification"
+            placeholder="000000"
+            value={otpCode}
+            onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            className="text-center text-2xl tracking-widest font-mono"
+          />
+
+          <div className="flex gap-3">
+            <Button onClick={handleVerifyAndSave} loading={loading} fullWidth>
+              Confirmer
+            </Button>
+            <Button onClick={() => { setShowOtpModal(false); setOtpCode(''); setError(''); }} variant="secondary" fullWidth>
+              Annuler
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -399,12 +952,10 @@ function EnqueteDetail({ affectation }) {
    HELPER COMPONENTS
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function StatBlock({ label, value, subValue, color }) {
+function KPICard({ label, value, subValue, color }) {
   return (
     <Card className="p-4">
-      <p className="text-[10px] font-semibold text-[#9CA3AF] uppercase tracking-wider mb-1">
-        {label}
-      </p>
+      <p className="text-[10px] font-semibold text-[#9CA3AF] uppercase tracking-wider mb-1">{label}</p>
       <p className="text-2xl font-bold" style={{ color }}>
         {value}
         {subValue && <span className="text-sm font-normal text-[#9CA3AF] ml-1">{subValue}</span>}
@@ -413,27 +964,10 @@ function StatBlock({ label, value, subValue, color }) {
   )
 }
 
-function CountryRow({ pays, completions, objectif }) {
-  const pct = Math.min(Math.round((completions / Math.max(objectif, 1)) * 100), 100)
-  const isComplete = pct >= 100
-
-  return (
-    <div className="flex items-center gap-3">
-      <span className={`w-20 text-sm truncate ${isComplete ? 'text-[#059669] font-medium' : 'text-[#4B5563]'}`}>
-        {pays}
-      </span>
-      <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-300"
-          style={{
-            width: `${pct}%`,
-            backgroundColor: isComplete ? '#059669' : '#059669',
-          }}
-        />
-      </div>
-      <span className="text-xs font-mono text-[#9CA3AF] w-12 text-right">
-        {completions}/{objectif}
-      </span>
-    </div>
-  )
+function getProgressColor(pct) {
+  if (pct >= 100) return '#059669'
+  if (pct >= 75) return '#10B981'
+  if (pct >= 50) return '#F59E0B'
+  if (pct >= 25) return '#F97316'
+  return '#EF4444'
 }

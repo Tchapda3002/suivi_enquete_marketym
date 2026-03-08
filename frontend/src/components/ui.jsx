@@ -355,3 +355,90 @@ export function Avatar({ name, size = 'md' }) {
     </div>
   )
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LINE CHART
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function LineChart({ data, height = 120, color = '#059669', showLabels = true }) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="flex items-center justify-center text-[#9CA3AF] text-sm" style={{ height }}>
+        Aucune donnee
+      </div>
+    )
+  }
+
+  const values = data.map(d => d.completions || 0)
+  const maxValue = Math.max(...values, 1)
+  const minValue = Math.min(...values)
+
+  const width = 100
+  const padding = { top: 10, right: 10, bottom: showLabels ? 25 : 10, left: 10 }
+  const chartWidth = width - padding.left - padding.right
+  const chartHeight = height - padding.top - padding.bottom
+
+  // Creer les points du graphique
+  const points = values.map((v, i) => {
+    const x = padding.left + (i / Math.max(values.length - 1, 1)) * chartWidth
+    const y = padding.top + chartHeight - ((v - minValue) / Math.max(maxValue - minValue, 1)) * chartHeight
+    return { x, y, value: v, date: data[i]?.date }
+  })
+
+  // Creer le path pour la ligne
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+
+  // Creer le path pour le remplissage
+  const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding.top + chartHeight} L ${padding.left} ${padding.top + chartHeight} Z`
+
+  // Formater la date
+  const formatDate = (dateStr) => {
+    if (!dateStr) return ''
+    const d = new Date(dateStr)
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
+  }
+
+  return (
+    <div className="relative w-full" style={{ height }}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full" preserveAspectRatio="none">
+        {/* Grille horizontale */}
+        {[0, 0.5, 1].map((ratio, i) => (
+          <line
+            key={i}
+            x1={padding.left}
+            y1={padding.top + chartHeight * (1 - ratio)}
+            x2={width - padding.right}
+            y2={padding.top + chartHeight * (1 - ratio)}
+            stroke="#E5E7EB"
+            strokeWidth="0.5"
+            strokeDasharray="2,2"
+          />
+        ))}
+
+        {/* Zone remplie */}
+        <path d={areaPath} fill={color} fillOpacity="0.1" />
+
+        {/* Ligne */}
+        <path d={linePath} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+
+        {/* Points */}
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="2" fill={color} />
+        ))}
+      </svg>
+
+      {/* Labels en bas */}
+      {showLabels && data.length > 1 && (
+        <div className="absolute bottom-0 left-0 right-0 flex justify-between px-2 text-[8px] text-[#9CA3AF]">
+          <span>{formatDate(data[0]?.date)}</span>
+          <span>{formatDate(data[data.length - 1]?.date)}</span>
+        </div>
+      )}
+
+      {/* Valeur max en haut a droite */}
+      <div className="absolute top-0 right-1 text-[9px] text-[#6B7280]">
+        max: {maxValue}
+      </div>
+    </div>
+  )
+}

@@ -1,10 +1,12 @@
 -- ============================================================
--- SCHEMA SUPABASE — Plateforme de suivi enqueteurs v3
--- Integration API QuestionPro
+-- SCHEMA SUPABASE — Plateforme de suivi enqueteurs v4
+-- Integration API QuestionPro avec quotas dynamiques
 -- A executer dans : Supabase > SQL Editor > New Query
 -- ============================================================
 
 -- Supprimer les tables si elles existent (pour reset)
+DROP TABLE IF EXISTS completions_segments CASCADE;
+DROP TABLE IF EXISTS quotas CASCADE;
 DROP TABLE IF EXISTS completions_pays CASCADE;
 DROP TABLE IF EXISTS affectations CASCADE;
 DROP TABLE IF EXISTS enqueteurs CASCADE;
@@ -31,7 +33,7 @@ CREATE TABLE pays (
   zone_id UUID REFERENCES zones(id) ON DELETE CASCADE,
   code TEXT UNIQUE NOT NULL,        -- Code ISO (SN, CI, ML...)
   nom TEXT NOT NULL,
-  quota INTEGER NOT NULL DEFAULT 0, -- Objectif par pays
+  quota INTEGER NOT NULL DEFAULT 0, -- Objectif par pays (legacy)
   icp_pct DECIMAL(5,2) DEFAULT 0    -- Pourcentage ICP
 );
 
@@ -45,6 +47,9 @@ CREATE TABLE enquetes (
   description TEXT,
   cible TEXT NOT NULL,                    -- Public vise
   statut TEXT DEFAULT 'en_cours' CHECK (statut IN ('brouillon', 'en_cours', 'termine', 'archive')),
+  -- Nouvelles colonnes pour segmentation dynamique
+  segmentation_question_id TEXT,          -- ID de la question QuestionPro pour segmentation
+  segmentation_question_text TEXT,        -- Texte de la question de segmentation
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -53,7 +58,7 @@ CREATE TABLE enquetes (
 -- ============================================================
 CREATE TABLE enqueteurs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  identifiant TEXT UNIQUE NOT NULL,       -- ACQ1, GENZ2, TR1...
+  identifiant TEXT UNIQUE NOT NULL,       -- ACQ1, GENZ2, TR1, ADMIN...
   nom TEXT NOT NULL,
   prenom TEXT NOT NULL,
   telephone TEXT,
@@ -61,6 +66,9 @@ CREATE TABLE enqueteurs (
   mode_remuneration TEXT CHECK (mode_remuneration IN ('espece', 'virement', 'cheque', 'espece_virement')),
   mot_de_passe TEXT NOT NULL DEFAULT '1234',
   actif BOOLEAN DEFAULT TRUE,
+  -- Nouvelles colonnes
+  is_admin BOOLEAN DEFAULT FALSE,         -- Si true, c'est un admin (ADMIN enqueteur)
+  derniere_connexion TIMESTAMPTZ,         -- Derniere connexion
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -86,7 +94,33 @@ CREATE TABLE affectations (
 );
 
 -- ============================================================
--- TABLE: completions_pays (progression par pays)
+-- TABLE: quotas (quotas dynamiques par segment)
+-- ============================================================
+CREATE TABLE quotas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  enquete_id UUID REFERENCES enquetes(id) ON DELETE CASCADE,
+  affectation_id UUID REFERENCES affectations(id) ON DELETE CASCADE,
+  segment_value TEXT NOT NULL,            -- Valeur du segment (ex: "Senegal", "18-25 ans")
+  objectif INTEGER NOT NULL DEFAULT 0,    -- Objectif pour ce segment
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  -- Contrainte: soit enquete_id (quota global) soit affectation_id (quota par enqueteur)
+  CONSTRAINT quotas_unique_constraint UNIQUE (enquete_id, affectation_id, segment_value)
+);
+
+-- ============================================================
+-- TABLE: completions_segments (completions par segment)
+-- ============================================================
+CREATE TABLE completions_segments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  affectation_id UUID REFERENCES affectations(id) ON DELETE CASCADE,
+  segment_value TEXT NOT NULL,            -- Valeur du segment
+  completions INTEGER DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT completions_segments_unique UNIQUE (affectation_id, segment_value)
+);
+
+-- ============================================================
+-- TABLE: completions_pays (legacy - pour compatibilite)
 -- ============================================================
 CREATE TABLE completions_pays (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -126,6 +160,10 @@ CREATE TRIGGER set_updated_at_completions_pays
 BEFORE UPDATE ON completions_pays
 FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+CREATE TRIGGER set_updated_at_completions_segments
+BEFORE UPDATE ON completions_segments
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 -- ============================================================
 -- DESACTIVER RLS (securite geree par le backend)
 -- ============================================================
@@ -135,12 +173,20 @@ ALTER TABLE enquetes DISABLE ROW LEVEL SECURITY;
 ALTER TABLE enqueteurs DISABLE ROW LEVEL SECURITY;
 ALTER TABLE affectations DISABLE ROW LEVEL SECURITY;
 ALTER TABLE completions_pays DISABLE ROW LEVEL SECURITY;
+ALTER TABLE completions_segments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE quotas DISABLE ROW LEVEL SECURITY;
 ALTER TABLE admin DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
 -- DONNEES: Admin par defaut
 -- ============================================================
 INSERT INTO admin (mot_de_passe) VALUES ('admin2024');
+
+-- ============================================================
+-- DONNEES: Enqueteur ADMIN (recoit les enquetes non assignees)
+-- ============================================================
+INSERT INTO enqueteurs (identifiant, nom, prenom, mot_de_passe, is_admin, actif)
+VALUES ('ADMIN', 'Administrateur', 'Systeme', 'admin2024', TRUE, TRUE);
 
 -- ============================================================
 -- DONNEES: Zones
@@ -164,6 +210,7 @@ FROM zones z, (VALUES
   ('UEMOA', 'TG', 'Togo', 13, 6.41),
   ('UEMOA', 'BJ', 'Benin', 16, 7.91),
   ('UEMOA', 'GW', 'Guinee-Bissau', 8, 4.14),
+  ('UEMOA', 'MR', 'Mauritanie', 10, 5.00),
   -- CEMAC
   ('CEMAC', 'CM', 'Cameroun', 22, 11.11),
   ('CEMAC', 'GA', 'Gabon', 14, 7.18),
