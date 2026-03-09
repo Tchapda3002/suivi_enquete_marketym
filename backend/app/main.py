@@ -702,7 +702,7 @@ def delete_enquete(id: str, admin: dict = Depends(require_super_admin), sb: Clie
 
 @app.get("/admin/enqueteurs")
 def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Liste de tous les utilisateurs avec stats (optimise - 2 requetes au lieu de N+1)"""
+    """Liste de tous les utilisateurs avec stats (optimise)"""
     # Requete 1: Recuperer tous les enqueteurs
     enqueteurs = sb.table("enqueteurs")\
         .select("*")\
@@ -712,12 +712,52 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
     if not enqueteurs.data:
         return []
 
-    # Requete 2: Charger TOUTES les affectations en une seule requete
+    # Requete 2: Charger TOUTES les affectations avec enquete_id
     all_affectations = sb.table("affectations")\
-        .select("enqueteur_id, objectif_total, completions_total, clics, enquetes(code, nom)")\
+        .select("id, enqueteur_id, enquete_id, objectif_total, completions_total, clics, enquetes(code, nom)")\
         .execute()
 
-    # Indexer les affectations par enqueteur_id pour acces O(1)
+    # Requete 3: Charger tous les quotas (pour calcul des valides)
+    all_quotas = sb.table("quotas")\
+        .select("segmentation_id, segment_value, objectif, completions")\
+        .execute()
+
+    # Requete 4: Charger toutes les segmentations (pour mapper aux enquetes)
+    all_segmentations = sb.table("segmentations")\
+        .select("id, enquete_id")\
+        .execute()
+
+    # Requete 5: Charger tous les completions_segments
+    all_segments = sb.table("completions_segments")\
+        .select("affectation_id, segment_value, completions")\
+        .execute()
+
+    # Creer mapping segmentation_id -> enquete_id
+    seg_to_enquete = {s["id"]: s["enquete_id"] for s in all_segmentations.data}
+
+    # Creer mapping enquete_id -> quotas (normalises)
+    enquete_quotas = {}
+    for q in all_quotas.data:
+        enquete_id = seg_to_enquete.get(q.get("segmentation_id"))
+        if enquete_id:
+            if enquete_id not in enquete_quotas:
+                enquete_quotas[enquete_id] = {}
+            seg_norm = normalize_country_name(q.get("segment_value", ""))
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            enquete_quotas[enquete_id][seg_norm] = {
+                "objectif": q.get("objectif", 0) or 0,
+                "completions_globales": q.get("completions", 0) or 0
+            }
+
+    # Creer mapping affectation_id -> completions_segments
+    aff_segments = {}
+    for s in all_segments.data:
+        aid = s["affectation_id"]
+        if aid not in aff_segments:
+            aff_segments[aid] = []
+        aff_segments[aid].append(s)
+
+    # Indexer les affectations par enqueteur_id
     affectations_map = {}
     for aff in all_affectations.data:
         eid = aff["enqueteur_id"]
@@ -734,12 +774,38 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
         total_completions = sum(a["completions_total"] or 0 for a in enq_affectations)
         total_clics = sum(a["clics"] or 0 for a in enq_affectations)
 
+        # Calculer completions valides pour cet enqueteur
+        total_valides = 0
+        for aff in enq_affectations:
+            enquete_id = aff.get("enquete_id")
+            quotas = enquete_quotas.get(enquete_id, {})
+            segments = aff_segments.get(aff["id"], [])
+
+            for seg in segments:
+                seg_val = seg.get("segment_value", "")
+                seg_comp = seg.get("completions", 0) or 0
+                seg_norm = normalize_country_name(seg_val)
+                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+
+                if seg_norm in quotas:
+                    obj = quotas[seg_norm]["objectif"]
+                    glob = quotas[seg_norm]["completions_globales"]
+                    if glob > 0 and obj > 0:
+                        if glob <= obj:
+                            total_valides += seg_comp
+                        else:
+                            ratio = obj / glob
+                            total_valides += int(seg_comp * ratio)
+                    else:
+                        total_valides += seg_comp
+
         result.append({
             **enq,
             "nb_enquetes": len(enq_affectations),
             "total_objectif": total_objectif,
             "total_clics": total_clics,
             "total_completions": total_completions,
+            "total_completions_valides": total_valides,
             "enquetes": [a["enquetes"] for a in enq_affectations if a.get("enquetes")]
         })
 

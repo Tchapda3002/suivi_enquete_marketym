@@ -866,8 +866,9 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
               </tr>
             </thead>
             <tbody>
-              {enqueteurs.sort((a, b) => (b.total_completions || 0) - (a.total_completions || 0)).slice(0, 5).map((enq, i) => {
-                const pct = enq.total_objectif > 0 ? Math.round((enq.total_completions / enq.total_objectif) * 100) : 0
+              {enqueteurs.sort((a, b) => (b.total_completions_valides ?? b.total_completions ?? 0) - (a.total_completions_valides ?? a.total_completions ?? 0)).slice(0, 5).map((enq, i) => {
+                const valides = enq.total_completions_valides ?? enq.total_completions ?? 0
+                const pct = enq.total_objectif > 0 ? Math.round((valides / enq.total_objectif) * 100) : 0
                 return (
                   <tr key={enq.id} className="border-b border-[#E5E7EB]">
                     <td className="py-3">
@@ -884,10 +885,10 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
                         </div>
                       </div>
                     </td>
-                    <td className="text-center py-3 text-sm font-semibold text-[#059669]">{enq.total_completions || 0}</td>
+                    <td className="text-center py-3 text-sm font-semibold text-[#059669]">{valides}</td>
                     <td className="py-3 w-32">
                       <div className="flex items-center gap-2">
-                        <ProgressBar value={enq.total_completions || 0} max={enq.total_objectif || 1} size="sm" />
+                        <ProgressBar value={valides} max={enq.total_objectif || 1} size="sm" />
                         <span className="text-xs font-mono" style={{ color: getProgressColor(pct) }}>{pct}%</span>
                       </div>
                     </td>
@@ -1141,7 +1142,8 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                     {affectations.map(a => {
                       const enqr = a.enqueteurs || {}
                       const statut = STATUTS.find(s => s.value === a.statut) || STATUTS[0]
-                      const rowPct = Math.round((a.completions_total / Math.max(a.objectif_total, 1)) * 100)
+                      const valides = a.completions_valides ?? a.completions_total ?? 0
+                      const rowPct = Math.round((valides / Math.max(a.objectif_total, 1)) * 100)
                       return (
                         <tr key={a.id} className="border-b border-[#E5E7EB] hover:bg-[#F9FAFB]">
                           <td className="px-4 py-3">
@@ -1154,10 +1156,10 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                             </div>
                           </td>
                           <td className="text-center px-4 py-3 text-sm font-mono text-[#6B7280]">{a.clics}</td>
-                          <td className="text-center px-4 py-3 text-sm font-mono font-medium text-[#111827]">{a.completions_total}</td>
+                          <td className="text-center px-4 py-3 text-sm font-mono font-medium text-[#111827]">{valides}</td>
                           <td className="px-4 py-3 w-36">
                             <div className="flex items-center gap-2">
-                              <ProgressBar value={a.completions_total} max={a.objectif_total} size="sm" />
+                              <ProgressBar value={valides} max={a.objectif_total} size="sm" />
                               <span className="text-xs font-mono" style={{ color: getProgressColor(rowPct) }}>{rowPct}%</span>
                             </div>
                           </td>
@@ -1623,7 +1625,8 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
           </thead>
           <tbody>
             {enqueteurs.map(e => {
-              const pct = e.total_objectif > 0 ? Math.round((e.total_completions / e.total_objectif) * 100) : 0
+              const valides = e.total_completions_valides ?? e.total_completions ?? 0
+              const pct = e.total_objectif > 0 ? Math.round((valides / e.total_objectif) * 100) : 0
               const lastConnexion = formatTimeAgo(e.derniere_connexion)
               return (
                 <tr key={e.id} onClick={() => onSelect(e)} className="border-b border-[#E5E7EB] hover:bg-[#ECFDF5] transition-colors cursor-pointer" style={{ opacity: e.actif === false ? 0.5 : 1 }}>
@@ -1644,10 +1647,10 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
                     <p className="text-xs text-[#9CA3AF]">{e.telephone || ''}</p>
                   </td>
                   <td className="text-center px-4 py-3 text-sm font-mono text-[#2563EB]">{e.nb_enquetes}</td>
-                  <td className="text-center px-4 py-3 text-sm font-mono font-medium text-[#059669]">{e.total_completions}</td>
+                  <td className="text-center px-4 py-3 text-sm font-mono font-medium text-[#059669]">{valides}</td>
                   <td className="px-4 py-3 w-36">
                     <div className="flex items-center gap-2">
-                      <ProgressBar value={e.total_completions} max={e.total_objectif} size="sm" />
+                      <ProgressBar value={valides} max={e.total_objectif} size="sm" />
                       <span className="text-xs font-mono" style={{ color: getProgressColor(pct) }}>{pct}%</span>
                     </div>
                   </td>
@@ -1766,7 +1769,8 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
         <div className="space-y-4">
           {affectations.map(aff => {
             const enquete = aff.enquetes || {}
-            const pct = Math.round((aff.completions_total / Math.max(aff.objectif_total, 1)) * 100)
+            const valides = aff.completions_valides ?? aff.completions_total ?? 0
+            const pct = Math.round((valides / Math.max(aff.objectif_total, 1)) * 100)
             return (
               <Card key={aff.id} className="p-5">
                 <div className="flex items-start justify-between mb-3">
@@ -1778,11 +1782,11 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
                     <h4 className="text-lg font-medium text-[#111827]">{enquete.nom}</h4>
                   </div>
                   <div className="text-right">
-                    <p className="text-2xl font-bold" style={{ color: getProgressColor(pct) }}>{aff.completions_total}</p>
+                    <p className="text-2xl font-bold" style={{ color: getProgressColor(pct) }}>{valides}</p>
                     <p className="text-xs text-[#9CA3AF]">/ {aff.objectif_total}</p>
                   </div>
                 </div>
-                <ProgressBar value={aff.completions_total} max={aff.objectif_total} size="md" />
+                <ProgressBar value={valides} max={aff.objectif_total} size="md" />
 
                 {aff.completions_pays?.filter(cp => cp.completions > 0).length > 0 && (
                   <div className="mt-4 pt-4 border-t border-[#E5E7EB]">
