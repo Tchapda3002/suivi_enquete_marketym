@@ -298,7 +298,7 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
             />
           </div>
           <div className="flex justify-between text-xs text-[#6B7280]">
-            <span>{totalCompletions} completions</span>
+            <span>{totalCompletions} valides</span>
             <span>Objectif: {totalObjectif}</span>
           </div>
         </Card>

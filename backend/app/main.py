@@ -584,10 +584,29 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
 
 @app.get("/admin/enquetes")
 def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Liste des enquetes avec stats"""
+    """Liste des enquetes avec stats et completions valides"""
     enquetes = sb.table("enquetes").select("*").order("code").execute()
-    result = []
 
+    # Charger tous les quotas en une requete
+    all_quotas = sb.table("quotas").select("segmentation_id, objectif, completions").execute()
+    all_segmentations = sb.table("segmentations").select("id, enquete_id").execute()
+
+    # Mapper segmentation_id -> enquete_id
+    seg_to_enquete = {s["id"]: s["enquete_id"] for s in all_segmentations.data}
+
+    # Calculer valides par enquete
+    enquete_valides = {}
+    for q in all_quotas.data:
+        enquete_id = seg_to_enquete.get(q.get("segmentation_id"))
+        if enquete_id:
+            if enquete_id not in enquete_valides:
+                enquete_valides[enquete_id] = 0
+            obj = q.get("objectif", 0) or 0
+            comp = q.get("completions", 0) or 0
+            # Valide = min(completions, objectif)
+            enquete_valides[enquete_id] += min(comp, obj) if obj > 0 else comp
+
+    result = []
     for enq in enquetes.data:
         affectations = sb.table("affectations")\
             .select("objectif_total, completions_total, clics")\
@@ -596,9 +615,10 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
 
         # Utiliser taille_echantillon comme objectif principal
         taille_echantillon = enq.get("taille_echantillon", 0)
-        total_objectif_affectations = sum(a["objectif_total"] for a in affectations.data)
-        total_completions = sum(a["completions_total"] for a in affectations.data)
-        total_clics = sum(a["clics"] for a in affectations.data)
+        total_objectif_affectations = sum(a["objectif_total"] or 0 for a in affectations.data)
+        total_completions = sum(a["completions_total"] or 0 for a in affectations.data)
+        total_clics = sum(a["clics"] or 0 for a in affectations.data)
+        total_valides = enquete_valides.get(enq["id"], 0)
 
         result.append({
             **enq,
@@ -606,7 +626,8 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
             "total_objectif": taille_echantillon if taille_echantillon > 0 else total_objectif_affectations,
             "total_objectif_affectations": total_objectif_affectations,
             "total_clics": total_clics,
-            "total_completions": total_completions
+            "total_completions": total_completions,
+            "total_valides": total_valides
         })
 
     return result

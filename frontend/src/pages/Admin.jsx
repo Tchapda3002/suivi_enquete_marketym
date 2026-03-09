@@ -639,20 +639,21 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
 
   const enquetesStats = filteredEnquetes.map(e => ({
     ...e,
-    pct: e.total_objectif > 0 ? Math.round((e.total_completions / e.total_objectif) * 100) : 0,
-    tauxConversion: e.total_clics > 0 ? Math.round((e.total_completions / e.total_clics) * 100) : 0
-  })).sort((a, b) => (b.total_completions || 0) - (a.total_completions || 0))  // Tri par completions décroissantes
+    valides: e.total_valides ?? e.total_completions ?? 0,
+    pct: e.total_objectif > 0 ? Math.round(((e.total_valides ?? e.total_completions ?? 0) / e.total_objectif) * 100) : 0,
+    tauxConversion: e.total_clics > 0 ? Math.round(((e.total_valides ?? e.total_completions ?? 0) / e.total_clics) * 100) : 0
+  })).sort((a, b) => (b.valides || 0) - (a.valides || 0))  // Tri par completions valides décroissantes
 
   // Stats filtrees
   const filteredTotalObjectif = filteredEnquetes.reduce((sum, e) => sum + (e.taille_echantillon || e.total_objectif || 0), 0)
-  const filteredTotalCompletions = filteredEnquetes.reduce((sum, e) => sum + (e.total_completions || 0), 0)
+  const filteredTotalValides = filteredEnquetes.reduce((sum, e) => sum + (e.total_valides ?? e.total_completions ?? 0), 0)
   const filteredTotalClics = filteredEnquetes.reduce((sum, e) => sum + (e.total_clics || 0), 0)
-  const filteredPct = filteredTotalObjectif > 0 ? Math.round((filteredTotalCompletions / filteredTotalObjectif) * 100) : 0
-  const filteredTauxConversion = filteredTotalClics > 0 ? Math.round((filteredTotalCompletions / filteredTotalClics) * 100) : 0
+  const filteredPct = filteredTotalObjectif > 0 ? Math.round((filteredTotalValides / filteredTotalObjectif) * 100) : 0
+  const filteredTauxConversion = filteredTotalClics > 0 ? Math.round((filteredTotalValides / filteredTotalClics) * 100) : 0
 
   // Taux de conversion global
   const tauxConversionGlobal = (dashboard?.total_clics || 0) > 0
-    ? Math.round(((dashboard?.total_completions || 0) / (dashboard?.total_clics || 1)) * 100)
+    ? Math.round(((dashboard?.total_valides || 0) / (dashboard?.total_clics || 1)) * 100)
     : 0
 
   return (
@@ -776,9 +777,9 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
                 </span>
               </div>
               <p className="text-sm font-medium text-[#111827] mb-2 truncate">{enq.nom}</p>
-              <ProgressBar value={enq.total_completions} max={enq.total_objectif} size="sm" />
+              <ProgressBar value={enq.valides} max={enq.total_objectif} size="sm" />
               <div className="flex justify-between mt-2 text-[10px]">
-                <span className="text-[#059669]">{enq.total_completions} completions</span>
+                <span className="text-[#059669]">{enq.valides} valides</span>
                 <span className="text-[#6B7280]">Obj: {enq.total_objectif}</span>
               </div>
               <div className="flex justify-between mt-1 text-[10px]">
@@ -923,7 +924,8 @@ function EnquetesListView({ enquetes, onSelect, onAdd, onEdit, onDelete, isSuper
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {enquetes.map(enq => {
-          const pct = enq.total_objectif > 0 ? Math.round((enq.total_completions / enq.total_objectif) * 100) : 0
+          const valides = enq.total_valides ?? enq.total_completions ?? 0
+          const pct = enq.total_objectif > 0 ? Math.round((valides / enq.total_objectif) * 100) : 0
           return (
             <Card key={enq.id} className="p-5 hover:shadow-md transition-shadow cursor-pointer" onClick={() => onSelect(enq)}>
               <div className="flex items-start justify-between mb-3">
@@ -951,9 +953,9 @@ function EnquetesListView({ enquetes, onSelect, onAdd, onEdit, onDelete, isSuper
                 <span className="text-sm text-[#6B7280]">{enq.nb_enqueteurs} enqueteurs</span>
                 <span className="text-lg font-bold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
               </div>
-              <ProgressBar value={enq.total_completions} max={enq.total_objectif} size="md" />
+              <ProgressBar value={valides} max={enq.total_objectif} size="md" />
               <div className="flex justify-between mt-2 text-xs text-[#9CA3AF]">
-                <span>{enq.total_completions} completions</span>
+                <span>{valides} valides</span>
                 <span>Obj: {enq.total_objectif}</span>
               </div>
             </Card>
