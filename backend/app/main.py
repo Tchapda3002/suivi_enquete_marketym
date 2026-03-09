@@ -1085,15 +1085,30 @@ async def get_survey_questions(survey_id: str, admin: dict = Depends(require_adm
 
 @app.post("/admin/sync")
 async def sync_all(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Synchroniser toutes les affectations avec QuestionPro"""
+    """Synchroniser toutes les affectations avec QuestionPro (en parallele)"""
+    import asyncio
+
     affectations = sb.table("affectations").select("id, survey_id").execute()
-    results = []
 
-    for aff in affectations.data:
-        result = await sync_affectation(aff["id"], aff["survey_id"], sb)
-        results.append(result)
+    # Executer les syncs en parallele (max 5 a la fois pour eviter de surcharger l'API)
+    semaphore = asyncio.Semaphore(5)
 
-    return {"synced": len(results), "results": results}
+    async def sync_with_limit(aff):
+        async with semaphore:
+            return await sync_affectation(aff["id"], aff["survey_id"], sb)
+
+    tasks = [sync_with_limit(aff) for aff in affectations.data]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Filtrer les erreurs
+    success_results = [r for r in results if not isinstance(r, Exception)]
+    error_count = len(results) - len(success_results)
+
+    return {
+        "synced": len(success_results),
+        "errors": error_count,
+        "results": success_results
+    }
 
 @app.post("/admin/sync/{affectation_id}")
 async def sync_one(affectation_id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):

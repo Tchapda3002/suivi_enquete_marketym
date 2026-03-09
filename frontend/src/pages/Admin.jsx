@@ -157,8 +157,8 @@ export default function Admin() {
           <div className="p-4 border-b border-[#E5E7EB]">
             <div className="grid grid-cols-2 gap-2">
               <div className="p-3 rounded-lg bg-[#F9FAFB]">
-                <p className="text-lg font-bold text-[#111827]">{dashboard.total_completions}</p>
-                <p className="text-[10px] text-[#9CA3AF]">Completions</p>
+                <p className="text-lg font-bold text-[#111827]">{dashboard.total_valides}</p>
+                <p className="text-[10px] text-[#9CA3AF]">Valides</p>
               </div>
               <div className="p-3 rounded-lg bg-[#ECFDF5]">
                 <p className="text-lg font-bold text-[#059669]">{dashboard.taux_completion}%</p>
@@ -1024,7 +1024,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
     onRefresh()
   }
 
-  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_total || 0), 0)
+  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   // Utiliser taille_echantillon de l'enquete si disponible, sinon somme des objectifs
   const tailleEchantillon = enquete.taille_echantillon || 0
   const totalObjectifAffectations = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
@@ -1711,7 +1711,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
   if (loading) return <div className="h-full flex items-center justify-center"><Spinner size="lg" /></div>
 
   const affectations = details?.affectations || []
-  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_total || 0), 0)
+  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
 
