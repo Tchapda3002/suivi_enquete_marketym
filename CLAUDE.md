@@ -117,6 +117,7 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 3. Liste des enquetes (CRUD)
 4. Stats par pays
 5. Affectations par enquete
+6. **Onglet "Mes enquetes"** - Permet aux admins de voir leurs propres affectations en tant qu'enqueteur
 
 ### Enqueteur
 1. Dashboard enqueteur avec ses stats
@@ -173,14 +174,16 @@ frontend/
 ```
 
 ## Derniere Session
-**Date**: 8 mars 2025
+**Date**: 9 mars 2025
 **Resume**:
-- Securisation des endpoints admin (require_admin)
-- Intercepteur axios pour JWT automatique
-- Simplification creation enquete (survey_id → fetch QuestionPro)
-- Modal avec verification du survey avant creation
+- Configuration email Brevo avec sous-domaine `notification.afrikalytics.co`
+- Nouvel expediteur: `noreply@notification.afrikalytics.co`
+- Ajout onglet "Mes enquetes" pour les admins (interface enqueteur integree)
+  - Liste des affectations personnelles de l'admin
+  - Vue statistiques avec KPIs, progression, segmentations
+  - Detail d'une affectation avec lien de collecte et quotas
 
 **Prochain step**:
-- Tester la creation d'enquete avec un vrai survey_id
+- Tester l'onglet "Mes enquetes" avec des affectations reelles
+- Mettre a jour EMAIL_FROM sur Railway pour la production
 - Implementer les affectations avec liens personnalises
-- Implementer les quotas par enquete

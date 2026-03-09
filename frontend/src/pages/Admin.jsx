@@ -8,6 +8,8 @@ import {
   updateAffectation,
   syncAll,
   getEnqueteur,
+  getEnqueteurSegmentations,
+  getHistoriqueEnqueteur,
   createEnquete,
   updateEnquete,
   deleteEnquete,
@@ -31,7 +33,7 @@ import {
   authUpdateProfile,
   updateEnqueteurRole,
 } from '../lib/api'
-import { Card, Badge, Button, Modal, Input, Avatar, Spinner, LineChart } from '../components/ui'
+import { Card, Badge, Button, Modal, Input, Avatar, Spinner, LineChart, CopyButton } from '../components/ui'
 
 const STATUTS = [
   { value: 'en_cours',  label: 'En cours',  variant: 'info' },
@@ -55,6 +57,12 @@ export default function Admin() {
   const [syncing, setSyncing] = useState(false)
   const [adminUser, setAdminUser] = useState(null)
 
+  // Mes enquetes (affectations personnelles de l'admin)
+  const [adminAffectations, setAdminAffectations] = useState([])
+  const [selectedMyEnquete, setSelectedMyEnquete] = useState(null)
+  const [adminSegmentations, setAdminSegmentations] = useState([])
+  const [adminHistorique, setAdminHistorique] = useState([])
+
   // Modals
   const [showEnqueteModal, setShowEnqueteModal] = useState(false)
   const [showEnqueteurModal, setShowEnqueteurModal] = useState(false)
@@ -68,12 +76,14 @@ export default function Admin() {
     const user = JSON.parse(stored)
     if (!user.is_admin) return nav('/dashboard')
     setAdminUser(user)
-    loadAll()
+    loadAll(user.id)
   }, [nav])
 
-  async function loadAll() {
+  async function loadAll(adminId) {
     setLoading(true)
     try {
+      const userId = adminId || adminUser?.id
+      // Charger les données principales
       const [d, e, enq, segStats, hist] = await Promise.all([
         getDashboard(),
         listEnquetes(),
@@ -86,7 +96,30 @@ export default function Admin() {
       setEnqueteurs(enq)
       setSegmentationsStats(segStats)
       setHistorique(hist || [])
-    } finally { setLoading(false) }
+
+      // Charger les données "Mes enquetes" separement (pour ne pas bloquer si erreur)
+      if (userId) {
+        try {
+          const [adminData, adminSegs, adminHist] = await Promise.all([
+            getEnqueteur(userId),
+            getEnqueteurSegmentations(userId),
+            getHistoriqueEnqueteur(userId, 30)
+          ])
+          setAdminAffectations(adminData?.affectations || [])
+          setAdminSegmentations(adminSegs || [])
+          setAdminHistorique(adminHist || [])
+        } catch (err) {
+          console.error('Erreur chargement Mes enquetes:', err)
+          setAdminAffectations([])
+          setAdminSegmentations([])
+          setAdminHistorique([])
+        }
+      }
+    } catch (err) {
+      console.error('Erreur chargement dashboard:', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const filteredEnqueteurs = enqueteurs.filter(e =>
@@ -203,6 +236,15 @@ export default function Admin() {
           />
 
           <NavButton
+            icon={<MyEnquetesIcon />}
+            label="Mes enquetes"
+            active={view === 'mes_enquetes'}
+            collapsed={sidebarCollapsed}
+            onClick={() => { setView('mes_enquetes'); setSelectedMyEnquete(null) }}
+            badge={adminAffectations.length > 0 ? adminAffectations.length : undefined}
+          />
+
+          <NavButton
             icon={<UserIcon />}
             label="Mon profil"
             active={view === 'profil'}
@@ -300,6 +342,20 @@ export default function Admin() {
               onEdit={openEnqueteModal}
               onDelete={handleDeleteEnquete}
               isSuperAdmin={isSuperAdmin}
+            />
+          )
+        ) : view === 'mes_enquetes' ? (
+          selectedMyEnquete ? (
+            <MyEnqueteDetailView
+              affectation={selectedMyEnquete}
+              onBack={() => setSelectedMyEnquete(null)}
+            />
+          ) : (
+            <MesEnquetesView
+              affectations={adminAffectations}
+              segmentations={adminSegmentations}
+              historique={adminHistorique}
+              onSelect={setSelectedMyEnquete}
             />
           )
         ) : view === 'profil' ? (
@@ -402,6 +458,18 @@ function UsersIcon() {
       <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
       <circle cx="9" cy="7" r="4" />
       <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+    </svg>
+  )
+}
+
+function MyEnquetesIcon() {
+  return (
+    <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
     </svg>
   )
 }
@@ -2554,3 +2622,394 @@ function AdminProfilView({ user, onUpdate }) {
     </div>
   )
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MES ENQUETES VIEW (pour les admins qui ont des affectations)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function MesEnquetesView({ affectations, segmentations, historique, onSelect }) {
+  const [activeTab, setActiveTab] = useState('list')
+
+  // Calculs des stats
+  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
+  const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
+  const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
+  const totalInvalides = affectations.reduce((s, a) => s + ((a.completions_total || 0) - (a.completions_valides ?? a.completions_total ?? 0)), 0)
+  const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
+  const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
+
+  if (affectations.length === 0) {
+    return (
+      <div className="p-8">
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-[#111827]">Mes enquetes</h1>
+          <p className="text-sm text-[#6B7280]">Vos enquetes assignees en tant qu'enqueteur</p>
+        </div>
+        <div className="text-center py-16">
+          <div className="w-16 h-16 rounded-2xl bg-[#F3F4F6] flex items-center justify-center mx-auto mb-4">
+            <MyEnquetesIcon />
+          </div>
+          <p className="text-[#6B7280]">Aucune enquete assignee</p>
+          <p className="text-sm text-[#9CA3AF] mt-1">Vous n'avez pas encore d'enquetes affectees en tant qu'enqueteur</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-[#111827]">Mes enquetes</h1>
+        <p className="text-sm text-[#6B7280]">{affectations.length} enquete{affectations.length > 1 ? 's' : ''} assignee{affectations.length > 1 ? 's' : ''}</p>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 mb-6">
+        <button
+          onClick={() => setActiveTab('list')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeTab === 'list'
+              ? 'bg-[#059669] text-white'
+              : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+          }`}
+        >
+          Liste
+        </button>
+        <button
+          onClick={() => setActiveTab('stats')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeTab === 'stats'
+              ? 'bg-[#059669] text-white'
+              : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+          }`}
+        >
+          Statistiques
+        </button>
+      </div>
+
+      {activeTab === 'list' ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {affectations.map(aff => {
+            const enquete = aff.enquetes || {}
+            const status = STATUTS.find(s => s.value === aff.statut) || STATUTS[0]
+            const completions = aff.completions_valides ?? aff.completions_total ?? 0
+            const invalides = (aff.completions_total || 0) - completions
+            const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
+            const convRate = aff.clics > 0 ? Math.round((completions / aff.clics) * 100) : 0
+
+            return (
+              <Card
+                key={aff.id}
+                className="p-5 hover:shadow-md transition-shadow cursor-pointer"
+                onClick={() => onSelect(aff)}
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-mono px-2 py-1 rounded bg-[#F3F4F6] text-[#6B7280]">
+                        {enquete.code}
+                      </span>
+                      <Badge variant={status.variant} size="sm">{status.label}</Badge>
+                    </div>
+                    <h3 className="text-lg font-semibold text-[#111827]">{enquete.nom}</h3>
+                    <p className="text-sm text-[#6B7280] line-clamp-1">{enquete.cible}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold" style={{ color: getProgressColor(pct) }}>{pct}%</p>
+                  </div>
+                </div>
+
+                {/* Mini Stats */}
+                <div className="grid grid-cols-4 gap-2 mb-3">
+                  <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
+                    <p className="text-lg font-bold text-[#059669]">{completions}</p>
+                    <p className="text-[10px] text-[#059669]">Valides</p>
+                  </div>
+                  <div className="p-2 rounded-lg bg-[#FEF2F2] text-center">
+                    <p className="text-lg font-bold text-[#DC2626]">{invalides}</p>
+                    <p className="text-[10px] text-[#DC2626]">Invalides</p>
+                  </div>
+                  <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
+                    <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
+                    <p className="text-[10px] text-[#7C3AED]">Clics</p>
+                  </div>
+                  <div className="p-2 rounded-lg bg-[#FFFBEB] text-center">
+                    <p className="text-lg font-bold text-[#D97706]">{convRate}%</p>
+                    <p className="text-[10px] text-[#D97706]">Conversion</p>
+                  </div>
+                </div>
+
+                <ProgressBar value={completions} max={aff.objectif_total} size="md" />
+                <p className="text-xs text-[#9CA3AF] mt-2 text-right">Objectif: {aff.objectif_total}</p>
+              </Card>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* KPIs */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <Card className="p-4">
+              <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
+              <p className="text-xs text-[#6B7280]">Completions <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-2xl font-bold text-[#2563EB]">{totalObjectif}</p>
+              <p className="text-xs text-[#6B7280]">Objectif total</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-2xl font-bold text-[#DC2626]">{totalInvalides}</p>
+              <p className="text-xs text-[#6B7280]">Invalides</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-2xl font-bold text-[#7C3AED]">{totalClics}</p>
+              <p className="text-xs text-[#6B7280]">Clics</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-2xl font-bold text-[#D97706]">{conversionRate}%</p>
+              <p className="text-xs text-[#6B7280]">Taux conversion</p>
+            </Card>
+          </div>
+
+          {/* Progression globale + Courbe */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-[#111827]">Progression globale</h3>
+                <span className="text-2xl font-bold text-[#059669]">{globalPct}%</span>
+              </div>
+              <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden mb-2">
+                <div
+                  className="h-full rounded-full bg-[#059669] transition-all duration-700"
+                  style={{ width: `${Math.min(globalPct, 100)}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-[#6B7280]">
+                <span>{totalCompletions} valides</span>
+                <span>Objectif: {totalObjectif}</span>
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-[#111827]">Evolution (30 jours)</h3>
+                {historique && historique.length > 0 && (
+                  <span className="text-xs text-[#6B7280]">{historique.length} jours</span>
+                )}
+              </div>
+              <LineChart data={historique} height={100} color="#059669" />
+            </Card>
+          </div>
+
+          {/* Segmentations */}
+          {segmentations && segmentations.length > 0 && (
+            <Card className="p-6">
+              <h3 className="font-semibold text-[#111827] mb-4">Segmentations</h3>
+              <div className="space-y-4">
+                {segmentations.map(seg => (
+                  <div key={seg.enquete_id}>
+                    <p className="text-sm font-medium text-[#6B7280] mb-2">{seg.enquete_code} - {seg.enquete_nom}</p>
+                    {seg.segmentations?.map(s => (
+                      <div key={s.id} className="ml-4">
+                        <p className="text-xs font-medium text-[#9CA3AF] mb-1">{s.nom}</p>
+                        {s.quotas.map((q, i) => {
+                          const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
+                          return (
+                            <div key={i} className="flex items-center gap-3 mb-1">
+                              <span className="w-24 text-xs text-[#4B5563] truncate">{q.segment_value}</span>
+                              <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
+                                <div className="h-full rounded-full bg-[#059669]" style={{ width: `${Math.min(pct, 100)}%` }} />
+                              </div>
+                              <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">{q.completions || 0}/{q.objectif}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MY ENQUETE DETAIL VIEW (detail d'une affectation pour l'admin)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function MyEnqueteDetailView({ affectation, onBack }) {
+  const enquete = affectation.enquetes || {}
+  const status = STATUTS.find(s => s.value === affectation.statut) || STATUTS[0]
+  const completions = affectation.completions_valides ?? affectation.completions_total ?? 0
+  const invalides = (affectation.completions_total || 0) - completions
+  const pct = Math.round((completions / Math.max(affectation.objectif_total, 1)) * 100)
+  const conversionRate = affectation.clics > 0 ? Math.round((completions / affectation.clics) * 100) : 0
+
+  return (
+    <div className="p-8 animate-fadeIn">
+      {/* Back button */}
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#111827] mb-4 transition-colors"
+      >
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M19 12H5M12 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        Retour a mes enquetes
+      </button>
+
+      {/* Header */}
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-mono px-2 py-1 rounded bg-[#F3F4F6] text-[#6B7280]">
+              {enquete.code}
+            </span>
+            <Badge variant={status.variant} dot>{status.label}</Badge>
+          </div>
+          <h1 className="text-2xl font-semibold text-[#111827] mb-1">{enquete.nom}</h1>
+          <p className="text-[#6B7280]">{enquete.cible}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-4xl font-bold" style={{ color: getProgressColor(pct) }}>{pct}%</p>
+          <p className="text-sm text-[#9CA3AF]">progression</p>
+        </div>
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <Card className="p-4">
+          <p className="text-2xl font-bold text-[#059669]">{completions}</p>
+          <p className="text-xs text-[#6B7280]">Valides <span className="text-[#9CA3AF]">/ {affectation.objectif_total}</span></p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold text-[#2563EB]">{affectation.objectif_total}</p>
+          <p className="text-xs text-[#6B7280]">Objectif</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold text-[#DC2626]">{invalides}</p>
+          <p className="text-xs text-[#6B7280]">Invalides</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold text-[#7C3AED]">{affectation.clics || 0}</p>
+          <p className="text-xs text-[#6B7280]">Clics</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold text-[#D97706]">{conversionRate}%</p>
+          <p className="text-xs text-[#6B7280]">Conversion</p>
+        </Card>
+      </div>
+
+      {/* Progress */}
+      <Card className="p-5 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-[#111827]">Progression globale</h3>
+          <span className="text-sm font-mono text-[#6B7280]">
+            {completions} / {affectation.objectif_total}
+          </span>
+        </div>
+        <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-700 ease-out bg-[#059669]"
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Lien */}
+        <Card className="p-5">
+          <h3 className="text-sm font-semibold text-[#111827] mb-4 flex items-center gap-2">
+            <svg className="w-4 h-4 text-[#059669]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            </svg>
+            Lien de collecte
+          </h3>
+          <div className="flex items-center gap-2 p-3 bg-[#F9FAFB] border border-[#E5E7EB] rounded-lg mb-4">
+            <p className="flex-1 text-xs font-mono text-[#4B5563] truncate">
+              {affectation.lien_questionnaire}
+            </p>
+            <CopyButton text={affectation.lien_questionnaire} />
+          </div>
+          <Button
+            variant="secondary"
+            fullWidth
+            onClick={() => window.open(affectation.lien_questionnaire, '_blank')}
+          >
+            Ouvrir le questionnaire
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </Button>
+        </Card>
+
+        {/* Segmentations */}
+        <Card className="p-5">
+          <h3 className="text-sm font-semibold text-[#111827] mb-4 flex items-center gap-2">
+            <svg className="w-4 h-4 text-[#059669]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+              <line x1="12" y1="22.08" x2="12" y2="12" />
+            </svg>
+            Progression par segment
+          </h3>
+          <div className="space-y-2.5 max-h-[200px] overflow-y-auto">
+            {affectation.quotas?.length > 0 ? (
+              [...affectation.quotas]
+                .filter(q => q.completions > 0 || q.objectif > 0)
+                .sort((a, b) => {
+                  const pctA = a.completions / Math.max(a.objectif, 1)
+                  const pctB = b.completions / Math.max(b.objectif, 1)
+                  return pctB - pctA
+                })
+                .map((q, i) => {
+                  const segPct = Math.min(Math.round((q.completions / Math.max(q.objectif, 1)) * 100), 100)
+                  const isComplete = segPct >= 100
+                  return (
+                    <div key={i} className="flex items-center gap-3">
+                      <span className={`w-24 text-sm truncate ${isComplete ? 'text-[#059669] font-medium' : 'text-[#4B5563]'}`} title={q.segment_value}>
+                        {q.segment_value || 'Inconnu'}
+                      </span>
+                      <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-[#059669]" style={{ width: `${segPct}%` }} />
+                      </div>
+                      <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">
+                        {q.completions}/{q.objectif}
+                      </span>
+                    </div>
+                  )
+                })
+            ) : (
+              <p className="text-sm text-[#9CA3AF] text-center py-6">Aucun quota defini</p>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Admin Message */}
+      {affectation.commentaire_admin && (
+        <Card className="p-5 mt-6 border-l-4 border-l-[#D97706] bg-[#FFFBEB]">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-[#D97706] flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            <div>
+              <p className="text-xs font-semibold text-[#92400E] mb-1">Note</p>
+              <p className="text-sm text-[#78350F]">{affectation.commentaire_admin}</p>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
