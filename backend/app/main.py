@@ -1229,6 +1229,21 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         seg_ids = [s["id"] for s in segmentations.data]
 
         if seg_ids:
+            # Recuperer tous les quotas de cette enquete avec leurs noms normalises
+            all_quotas = sb.table("quotas")\
+                .select("id, segment_value")\
+                .in_("segmentation_id", seg_ids)\
+                .is_("affectation_id", "null")\
+                .execute()
+
+            # Creer un mapping: nom_normalise -> quota_id
+            quota_mapping = {}
+            for q in all_quotas.data:
+                q_name = q.get("segment_value", "")
+                q_norm = normalize_country_name(q_name)
+                q_norm = PAYS_MAPPING.get(q_norm, q_norm)
+                quota_mapping[q_norm] = q["id"]
+
             # Recuperer toutes les affectations de cette enquete
             all_affs = sb.table("affectations").select("id").eq("enquete_id", enquete_id).execute()
             all_aff_ids = [a["id"] for a in all_affs.data]
@@ -1240,21 +1255,25 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
                     .in_("affectation_id", all_aff_ids)\
                     .execute()
 
-                # Agreger par segment_value
+                # Agreger par segment_value NORMALISE
                 global_counts = {}
                 for s in all_segments.data:
                     seg = s.get("segment_value", "")
                     count = s.get("completions", 0) or 0
                     if seg:
-                        global_counts[seg] = global_counts.get(seg, 0) + count
+                        # Normaliser le nom du segment
+                        seg_norm = normalize_country_name(seg)
+                        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                        global_counts[seg_norm] = global_counts.get(seg_norm, 0) + count
 
-                # Mettre a jour les quotas globaux UNIQUEMENT pour les segmentations de cette enquete
-                for segment_value, total_completions in global_counts.items():
-                    # Mettre a jour les quotas qui appartiennent aux segmentations de cette enquete
-                    sb.table("quotas").update({
-                        "completions": total_completions,
-                        "updated_at": datetime.utcnow().isoformat()
-                    }).in_("segmentation_id", seg_ids).eq("segment_value", segment_value).is_("affectation_id", "null").execute()
+                # Mettre a jour les quotas globaux par ID (pas par nom)
+                for seg_norm, total_completions in global_counts.items():
+                    if seg_norm in quota_mapping:
+                        quota_id = quota_mapping[seg_norm]
+                        sb.table("quotas").update({
+                            "completions": total_completions,
+                            "updated_at": datetime.utcnow().isoformat()
+                        }).eq("id", quota_id).execute()
 
     # Note: L'historique est maintenant basé sur les timestamps QuestionPro directement
     # Plus besoin d'enregistrer dans historique_completions
