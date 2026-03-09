@@ -1016,11 +1016,67 @@ def list_affectations(admin: dict = Depends(require_admin), sb: Client = Depends
 
 @app.get("/admin/affectations/by-enquete/{enquete_id}")
 def list_affectations_by_enquete(enquete_id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    res = sb.table("affectations")\
+    """Liste des affectations d'une enquete avec completions_valides"""
+    affectations = sb.table("affectations")\
         .select("*, enqueteurs(*)")\
         .eq("enquete_id", enquete_id)\
         .execute()
-    return res.data
+
+    if not affectations.data:
+        return []
+
+    # Recuperer les quotas de l'enquete (normalises)
+    segmentations = sb.table("segmentations").select("id").eq("enquete_id", enquete_id).execute()
+    seg_ids = [s["id"] for s in segmentations.data]
+
+    quota_info = {}
+    if seg_ids:
+        quotas_raw = sb.table("quotas")\
+            .select("segment_value, objectif")\
+            .in_("segmentation_id", seg_ids)\
+            .is_("affectation_id", "null")\
+            .execute()
+        for q in quotas_raw.data:
+            seg_norm = normalize_country_name(q.get("segment_value", ""))
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            quota_info[seg_norm] = q.get("objectif", 0) or 0
+
+    # Recuperer completions_segments pour toutes les affectations
+    aff_ids = [a["id"] for a in affectations.data]
+    all_segments = {}
+    if aff_ids:
+        segments_data = sb.table("completions_segments")\
+            .select("affectation_id, segment_value, completions")\
+            .in_("affectation_id", aff_ids)\
+            .execute()
+        for s in segments_data.data:
+            aid = s["affectation_id"]
+            if aid not in all_segments:
+                all_segments[aid] = []
+            all_segments[aid].append(s)
+
+    # Calculer completions_valides pour chaque affectation (quotas INDIVIDUELS)
+    for aff in affectations.data:
+        aff_segments = all_segments.get(aff["id"], [])
+        completions_valides = 0
+
+        # Agreger les completions par segment normalise
+        segments_agreg = {}
+        for seg in aff_segments:
+            seg_val = seg.get("segment_value", "")
+            seg_comp = seg.get("completions", 0) or 0
+            seg_norm = normalize_country_name(seg_val)
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
+
+        for seg_norm, seg_comp in segments_agreg.items():
+            if seg_norm in quota_info:
+                # Quota individuel: valides = min(completions, objectif)
+                completions_valides += min(seg_comp, quota_info[seg_norm])
+
+        aff["completions_valides"] = completions_valides
+
+    return affectations.data
 
 @app.post("/admin/affectations")
 def create_affectation(data: CreateAffectation, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
