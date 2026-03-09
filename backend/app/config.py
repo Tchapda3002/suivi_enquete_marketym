@@ -37,13 +37,19 @@ class Settings:
     # Frontend
     FRONTEND_URL: str = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
+    # Backend (pour les liens de tracking)
+    BACKEND_URL: str = os.environ.get("BACKEND_URL", "http://localhost:8000")
+
     # CORS - Origines autorisees
     @property
     def ALLOWED_ORIGINS(self) -> list:
         origins = [
             "http://localhost:5173",
             "http://localhost:3000",
+            "http://localhost:3001",
             "http://127.0.0.1:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
         ]
         # Ajouter l'URL frontend de production si definie
         if self.FRONTEND_URL and self.FRONTEND_URL not in origins:

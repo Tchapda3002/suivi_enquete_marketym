@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import httpx
@@ -287,6 +288,81 @@ def extract_segment_value_from_response(response: dict, question_id: str) -> str
     return "Autre"
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TRACKING CLICS - Endpoint de redirection
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_client_ip(request: Request) -> str:
+    """Recuperer l'adresse IP du client (supporte les proxies)"""
+    # Headers standards pour les proxies
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        # Prendre la premiere IP (client original)
+        return forwarded.split(",")[0].strip()
+
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+
+    # Fallback: IP directe
+    return request.client.host if request.client else "unknown"
+
+@app.get("/r/{affectation_id}")
+async def track_and_redirect(affectation_id: str, request: Request, sb: Client = Depends(get_supabase)):
+    """
+    Tracker le clic et rediriger vers le questionnaire QuestionPro.
+    Deduplication par IP: un seul clic compte par IP unique.
+    """
+    # Recuperer l'affectation avec le lien direct
+    aff = sb.table("affectations")\
+        .select("id, lien_direct, lien_questionnaire, survey_id, enqueteur_id")\
+        .eq("id", affectation_id)\
+        .execute()
+
+    if not aff.data:
+        raise HTTPException(status_code=404, detail="Lien invalide")
+
+    affectation = aff.data[0]
+
+    # Determiner le lien de redirection (lien_direct si existe, sinon lien_questionnaire)
+    redirect_url = affectation.get("lien_direct") or affectation.get("lien_questionnaire")
+
+    if not redirect_url:
+        raise HTTPException(status_code=404, detail="Aucun lien de questionnaire configure")
+
+    # Recuperer l'IP et le user-agent
+    ip_address = get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "")[:500]  # Limiter la taille
+
+    # Enregistrer le clic (avec deduplication par IP via UNIQUE constraint)
+    try:
+        sb.table("clics").insert({
+            "affectation_id": affectation_id,
+            "ip_address": ip_address,
+            "user_agent": user_agent
+        }).execute()
+
+        # Mettre a jour le compteur de clics dans affectations
+        # COUNT des IPs uniques pour cette affectation
+        clics_count = sb.table("clics")\
+            .select("id", count="exact")\
+            .eq("affectation_id", affectation_id)\
+            .execute()
+
+        sb.table("affectations")\
+            .update({"clics": clics_count.count})\
+            .eq("id", affectation_id)\
+            .execute()
+
+    except Exception as e:
+        # Si l'IP existe deja (doublon), on ignore l'erreur
+        # L'utilisateur est quand meme redirige
+        if "duplicate" not in str(e).lower() and "unique" not in str(e).lower():
+            print(f"Erreur tracking clic: {e}")
+
+    # Rediriger vers QuestionPro
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ROUTES ENQUETEUR
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -489,13 +565,17 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
         # S'assurer que valides <= completions_total
         aff["completions_valides"] = min(completions_valides, completions_total)
 
-        # Generer le lien questionnaire dynamiquement
-        enquete = aff.get("enquetes", {})
-        survey_id = enquete.get("survey_id") if enquete else None
-        if survey_id and enq.get("token"):
-            aff["lien_questionnaire"] = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enq['token']}"
-        else:
-            aff["lien_questionnaire"] = None
+        # Utiliser le lien de tracking existant, ou le generer si absent
+        if not aff.get("lien_questionnaire"):
+            # Generer le lien de tracking pour les anciennes affectations
+            aff["lien_questionnaire"] = f"{settings.BACKEND_URL}/r/{aff['id']}"
+
+            # S'assurer que lien_direct existe pour la redirection
+            if not aff.get("lien_direct"):
+                enquete = aff.get("enquetes", {})
+                survey_id = enquete.get("survey_id") if enquete else None
+                if survey_id and enq.get("token"):
+                    aff["lien_direct"] = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enq['token']}"
 
     return {**enq, "affectations": affectations.data}
 
@@ -1124,17 +1204,17 @@ def create_affectation(data: CreateAffectation, admin: dict = Depends(require_ad
     if existing.data:
         raise HTTPException(status_code=400, detail="Cet enqueteur est deja affecte a cette enquete")
 
-    # Generer le nouveau lien avec le token de l'enqueteur (si survey_id existe)
-    lien_questionnaire = None
+    # Generer le lien direct QuestionPro (pour la redirection)
+    lien_direct = None
     if survey_id and enqueteur_token:
-        lien_questionnaire = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enqueteur_token}"
+        lien_direct = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enqueteur_token}"
 
-    # Creer l'affectation
+    # Creer l'affectation (sans lien_questionnaire pour l'instant)
     affectation_data = {
         "enquete_id": data.enquete_id,
         "enqueteur_id": data.enqueteur_id,
         "survey_id": survey_id,
-        "lien_questionnaire": lien_questionnaire,
+        "lien_direct": lien_direct,
         "objectif_total": data.objectif_total,
     }
 
@@ -1142,8 +1222,17 @@ def create_affectation(data: CreateAffectation, admin: dict = Depends(require_ad
     if not res.data:
         raise HTTPException(status_code=400, detail="Erreur creation affectation")
 
-    # Initialiser completions_pays pour cette affectation
+    # Recuperer l'ID et generer le lien de tracking
     aff_id = res.data[0]["id"]
+
+    # Generer le lien de tracking (passe par notre backend pour compter les clics)
+    lien_questionnaire = f"{settings.BACKEND_URL}/r/{aff_id}"
+
+    # Mettre a jour l'affectation avec le lien de tracking
+    sb.table("affectations")\
+        .update({"lien_questionnaire": lien_questionnaire})\
+        .eq("id", aff_id)\
+        .execute()
     pays_list = sb.table("pays").select("id, quota").execute()
     for pays in pays_list.data:
         sb.table("completions_pays").insert({
@@ -1194,6 +1283,46 @@ def delete_affectation(id: str, admin: dict = Depends(require_super_admin), sb: 
     """Supprimer une affectation (super admin uniquement)"""
     sb.table("affectations").delete().eq("id", id).execute()
     return {"ok": True}
+
+@app.get("/admin/affectations/{id}/clics")
+def get_affectation_clics(id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Recuperer les clics d'une affectation (avec IPs uniques)"""
+    clics = sb.table("clics")\
+        .select("id, ip_address, user_agent, created_at")\
+        .eq("affectation_id", id)\
+        .order("created_at", desc=True)\
+        .execute()
+
+    return {
+        "affectation_id": id,
+        "total_clics": len(clics.data),
+        "clics": clics.data
+    }
+
+@app.post("/admin/affectations/migrate-links")
+def migrate_affectation_links(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """
+    Migrer les anciennes affectations vers le nouveau systeme de tracking.
+    Met a jour lien_questionnaire avec le lien de tracking /r/{id}
+    """
+    # Recuperer les affectations sans lien_questionnaire ou avec ancien format
+    affectations = sb.table("affectations")\
+        .select("id, lien_questionnaire, lien_direct")\
+        .execute()
+
+    updated = 0
+    for aff in affectations.data:
+        lien_q = aff.get("lien_questionnaire")
+        # Si pas de lien ou si c'est un ancien lien QuestionPro direct
+        if not lien_q or "questionpro.com" in (lien_q or ""):
+            new_link = f"{settings.BACKEND_URL}/r/{aff['id']}"
+            sb.table("affectations")\
+                .update({"lien_questionnaire": new_link})\
+                .eq("id", aff["id"])\
+                .execute()
+            updated += 1
+
+    return {"message": f"{updated} affectations mises a jour", "updated": updated}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ROUTES ADMIN - SEGMENTATIONS
@@ -1460,19 +1589,27 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         responses = await fetch_survey_responses(target_survey_id)
         # Toutes les reponses de ce survey appartiennent a cet enqueteur
         enqueteur_responses = [r for r in responses if r.get("responseStatus") == "Completed"]
+        # Clics = IPs uniques de TOUTES les reponses (pas seulement Completed)
+        unique_ips = set(r.get("ipAddress") for r in responses if r.get("ipAddress"))
     else:
         # Nouveau systeme: filtrer par custom1=token
         target_survey_id = survey_id_enquete or survey_id_affectation
         responses = await fetch_survey_responses(target_survey_id)
         # Filtrer par custom1 = token de l'enqueteur
         enqueteur_responses = []
+        enqueteur_all_responses = []  # Toutes les reponses (pour les clics)
         for r in responses:
-            if r.get("responseStatus") != "Completed":
-                continue
             custom_vars = r.get("customVariables", {})
             custom1 = custom_vars.get("custom1", "")
             if custom1 == enqueteur_token:
-                enqueteur_responses.append(r)
+                enqueteur_all_responses.append(r)
+                if r.get("responseStatus") == "Completed":
+                    enqueteur_responses.append(r)
+        # Clics = IPs uniques de toutes les reponses de cet enqueteur
+        unique_ips = set(r.get("ipAddress") for r in enqueteur_all_responses if r.get("ipAddress"))
+
+    # Nombre de clics = nombre d'IPs uniques (deduplication)
+    clics_count = len(unique_ips)
 
     # 4. Recuperer les stats du survey
     stats = await fetch_survey_stats(target_survey_id)
@@ -1543,10 +1680,10 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
     total_non_attribuees = completions_enqueteur - total_attribuees
 
     # 8. Mettre a jour l'affectation avec completions_total, clics et invalid_total
-    # Pour le nouveau systeme, on utilise les completions de l'enqueteur, pas les stats globales
+    # Clics = nombre d'IPs uniques (deduplication)
     sb.table("affectations").update({
         "completions_total": completions_enqueteur,
-        "clics": stats.get("clics", 0) if is_ancien_systeme else 0,  # Clics uniquement pour ancien systeme
+        "clics": clics_count,  # IPs uniques = vrais clics sans doublons
         "invalid_total": max(0, total_non_attribuees),
         "derniere_synchro": datetime.utcnow().isoformat()
     }).eq("id", affectation_id).execute()
@@ -1641,8 +1778,8 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
     return {
         "affectation_id": affectation_id,
         "survey_id": survey_id,
-        "completions": stats["completions"],
-        "clics": stats["clics"],
+        "completions": completions_enqueteur,
+        "clics": clics_count,  # IPs uniques
         "completions_attribuees": total_attribuees,
         "completions_non_attribuees": total_non_attribuees,
         "pays_counts": pays_counts,

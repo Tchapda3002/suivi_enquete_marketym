@@ -46,9 +46,15 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 - created_at
 
 ### affectations
-- id, enqueteur_id, enquete_id, survey_id, lien_questionnaire
+- id, enqueteur_id, enquete_id, survey_id
+- lien_questionnaire (lien de tracking /r/{id})
+- lien_direct (lien QuestionPro)
 - objectif_total, completions_total, clics, invalid_total
 - statut, commentaire_admin, derniere_synchro, created_at
+
+### clics (tracking avec deduplication IP)
+- id, affectation_id, ip_address, user_agent, created_at
+- UNIQUE(affectation_id, ip_address)
 
 ### quotas
 - id, enquete_id, affectation_id, segment_value, objectif
@@ -76,7 +82,14 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 | POST | /enquetes | Creer enquete (survey_id, cible, description) |
 | GET | /stats-pays | Stats par pays |
 | GET | /affectations/by-enquete/{id} | Affectations d'une enquete |
+| GET | /affectations/{id}/clics | Voir les clics d'une affectation |
+| POST | /affectations/migrate-links | Migrer les anciens liens vers le tracking |
 | POST | /sync | Synchroniser toutes les affectations |
+
+### Tracking (Public)
+| Methode | Endpoint | Description |
+|---------|----------|-------------|
+| GET | /r/{affectation_id} | Track clic et redirige vers QuestionPro |
 
 ### Enqueteur (`/enqueteur`)
 | Methode | Endpoint | Description |
@@ -176,14 +189,23 @@ frontend/
 ## Derniere Session
 **Date**: 9 mars 2025
 **Resume**:
-- Configuration email Brevo avec sous-domaine `notification.afrikalytics.co`
-- Nouvel expediteur: `noreply@notification.afrikalytics.co`
-- Ajout onglet "Mes enquetes" pour les admins (interface enqueteur integree)
-  - Liste des affectations personnelles de l'admin
-  - Vue statistiques avec KPIs, progression, segmentations
-  - Detail d'une affectation avec lien de collecte et quotas
+- Implementation du tracking des clics avec deduplication par IP
+  - Nouvelle table `clics` (affectation_id, ip_address, user_agent, created_at)
+  - Endpoint de redirection `/r/{affectation_id}` qui track le clic puis redirige vers QuestionPro
+  - Deduplication automatique: un seul clic compte par IP unique par affectation
+  - Nouvelle colonne `lien_direct` dans affectations (lien QuestionPro)
+  - `lien_questionnaire` contient maintenant le lien de tracking
+- Nouveaux endpoints admin:
+  - `GET /admin/affectations/{id}/clics` - voir les clics d'une affectation
+  - `POST /admin/affectations/migrate-links` - migrer les anciennes affectations
+- Migration: `backend/migrations/005_table_clics.sql`
+
+**Configuration requise**:
+- Ajouter `BACKEND_URL` dans les variables d'environnement (ex: `https://api.marketym.com`)
+- Executer la migration SQL dans Supabase
+- Appeler `/admin/affectations/migrate-links` pour mettre a jour les anciennes affectations
 
 **Prochain step**:
-- Tester l'onglet "Mes enquetes" avec des affectations reelles
-- Mettre a jour EMAIL_FROM sur Railway pour la production
-- Implementer les affectations avec liens personnalises
+- Executer la migration en production
+- Configurer BACKEND_URL sur Railway
+- Tester le tracking des clics
