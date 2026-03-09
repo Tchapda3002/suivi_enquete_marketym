@@ -529,7 +529,7 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
     """Stats globales avec completions valides/invalides"""
     enquetes = sb.table("enquetes").select("id, code, nom, statut, taille_echantillon").execute()
     enqueteurs = sb.table("enqueteurs").select("*").execute()
-    affectations = sb.table("affectations").select("objectif_total, completions_total, clics, statut").execute()
+    affectations = sb.table("affectations").select("id, enquete_id, objectif_total, completions_total, clics, statut").execute()
 
     # Objectif global = somme des tailles d'echantillon de toutes les enquetes
     total_objectif = sum(e.get("taille_echantillon", 0) for e in enquetes.data)
