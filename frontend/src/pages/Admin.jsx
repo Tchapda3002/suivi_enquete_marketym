@@ -712,7 +712,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <KPICard label="Enquetes" value={filteredEnquetes.length} icon={<ClipboardIcon />} color="#2563EB" bgColor="#EFF6FF" />
-          <KPICard label="Completions" value={filteredTotalCompletions} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
+          <KPICard label="Valides" value={filteredTotalValides} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
           <KPICard label="Echantillon" value={filteredTotalObjectif} icon={<TargetIcon />} color="#7C3AED" bgColor="#F5F3FF" />
           <KPICard label="Conversion" value={`${filteredTauxConversion}%`} icon={<ChartIcon />} color="#D97706" bgColor="#FFFBEB" />
           <KPICard label="Clics" value={filteredTotalClics} icon={<ClickIcon />} color="#6B7280" bgColor="#F3F4F6" />
@@ -731,13 +731,13 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
             </span>
           </div>
           <ProgressBar
-            value={statutFilter === 'all' ? (dashboard?.total_valides || 0) : filteredTotalCompletions}
+            value={statutFilter === 'all' ? (dashboard?.total_valides || 0) : filteredTotalValides}
             max={statutFilter === 'all' ? (dashboard?.total_objectif || 1) : (filteredTotalObjectif || 1)}
             size="lg"
           />
           <div className="flex justify-between mt-2 text-xs">
             <span className="text-[#059669] font-medium">
-              {statutFilter === 'all' ? (dashboard?.total_valides || 0) : filteredTotalCompletions} completions
+              {statutFilter === 'all' ? (dashboard?.total_valides || 0) : filteredTotalValides} valides
             </span>
             <span className="text-[#6B7280]">
               Echantillon: {statutFilter === 'all' ? (dashboard?.total_objectif || 0) : filteredTotalObjectif}
@@ -862,7 +862,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
               <tr className="border-b border-[#E5E7EB]">
                 <th className="text-left py-2 text-[10px] font-semibold text-[#6B7280] uppercase">#</th>
                 <th className="text-left py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Enqueteur</th>
-                <th className="text-center py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Completions</th>
+                <th className="text-center py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Valides</th>
                 <th className="py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Progression</th>
               </tr>
             </thead>
@@ -1076,7 +1076,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
           </div>
           <div className="p-4 rounded-xl bg-[#ECFDF5]">
             <p className="text-xl font-bold text-[#059669]">{totalCompletions}</p>
-            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Completions</p>
+            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Valides</p>
           </div>
           <div className="p-4 rounded-xl bg-[#F5F3FF]">
             <p className="text-xl font-bold text-[#7C3AED]">{pct}%</p>
@@ -1134,7 +1134,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                     <tr className="bg-[#F9FAFB] border-b border-[#E5E7EB]">
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Enqueteur</th>
                       <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Clics</th>
-                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Completions</th>
+                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Valides</th>
                       <th className="px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Progression</th>
                       <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Statut</th>
                       <th className="px-4 py-3"></th>
@@ -1619,7 +1619,7 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
               <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Enqueteur</th>
               <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Contact</th>
               <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Enquetes</th>
-              <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Completions</th>
+              <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Valides</th>
               <th className="px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Progression</th>
               <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Connexion</th>
               <th className="px-4 py-3"></th>
@@ -1753,7 +1753,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
           </div>
           <div className="p-4 rounded-xl bg-[#ECFDF5]">
             <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
-            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Completions</p>
+            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Valides</p>
           </div>
           <div className="p-4 rounded-xl bg-[#F5F3FF]">
             <p className="text-2xl font-bold text-[#7C3AED]">{totalObjectif}</p>
