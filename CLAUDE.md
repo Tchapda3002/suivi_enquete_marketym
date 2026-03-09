@@ -195,13 +195,16 @@ frontend/
   - Deduplication automatique: un seul clic compte par IP unique par affectation
   - Nouvelle colonne `lien_direct` dans affectations (lien QuestionPro)
   - `lien_questionnaire` contient maintenant le lien de tracking
+  - Clics = IPs uniques des reponses QuestionPro (avant: 993, apres: 227)
 - Nouveaux endpoints admin:
   - `GET /admin/affectations/{id}/clics` - voir les clics d'une affectation
   - `POST /admin/affectations/migrate-links` - migrer les anciennes affectations
 - Migration: `backend/migrations/005_table_clics.sql`
+- Correction expediteur email: `marketym@hcexecutive.net` (l'ancien `notification.afrikalytics.co` etait bloque)
 
-**Configuration requise**:
-- Ajouter `BACKEND_URL` dans les variables d'environnement (ex: `https://api.marketym.com`)
+**Configuration requise sur Railway**:
+- `BACKEND_URL` = URL du backend (ex: `https://api.marketym.com`)
+- `EMAIL_FROM` = `marketym@hcexecutive.net`
 - Executer la migration SQL dans Supabase
 - Appeler `/admin/affectations/migrate-links` pour mettre a jour les anciennes affectations
 
