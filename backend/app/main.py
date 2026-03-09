@@ -438,36 +438,36 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
                     "completions_globales": q.get("completions", 0) or 0
                 }
 
-        # Calculer completions valides par segment
+        # Calculer completions valides par segment (quotas INDIVIDUELS)
+        # Chaque enqueteur a les memes quotas par segment
+        # Valides = min(completions_enqueteur, quota_individuel)
         completions_valides = 0
+        completions_total = aff.get("completions_total", 0) or 0
+
+        # Agreger les completions par segment normalise (car peut y avoir Senegal + Sénégal)
+        segments_agreg = {}
         for seg in enqueteur_segments:
             seg_val = seg.get("segment_value", "")
             seg_comp = seg.get("completions", 0) or 0
-
-            # Normaliser pour la comparaison
             seg_val_norm = normalize_country_name(seg_val)
-            # Utiliser le mapping si disponible (ex: congo-brazzaville -> congo)
             seg_val_norm = PAYS_MAPPING.get(seg_val_norm, seg_val_norm)
+            segments_agreg[seg_val_norm] = segments_agreg.get(seg_val_norm, 0) + seg_comp
 
+        # Calculer le ratio si les segments depassent completions_total (doublons dans DB)
+        sum_segments = sum(segments_agreg.values())
+        ratio = completions_total / sum_segments if sum_segments > completions_total else 1.0
+
+        for seg_val_norm, seg_comp in segments_agreg.items():
+            # Ajuster seg_comp si ratio < 1 (correction doublons)
+            seg_comp_adjusted = int(seg_comp * ratio) if ratio < 1 else seg_comp
             if seg_val_norm in quota_info:
                 objectif = quota_info[seg_val_norm]["objectif"]
-                comp_globales = quota_info[seg_val_norm]["completions_globales"]
+                # Quota individuel: valides = min(completions, objectif)
+                completions_valides += min(seg_comp_adjusted, objectif)
+            # Segment non trouve = invalide (non classifie), on n'ajoute rien
 
-                if comp_globales > 0 and objectif > 0:
-                    if comp_globales <= objectif:
-                        # Pas de debordement, toutes les completions sont valides
-                        completions_valides += seg_comp
-                    else:
-                        # Debordement: calculer la part proportionnelle
-                        ratio = objectif / comp_globales
-                        completions_valides += int(seg_comp * ratio)
-                else:
-                    completions_valides += seg_comp
-            else:
-                # Segment non trouve dans les quotas = invalide (non classifie)
-                pass
-
-        aff["completions_valides"] = completions_valides
+        # S'assurer que valides <= completions_total
+        aff["completions_valides"] = min(completions_valides, completions_total)
 
         # Generer le lien questionnaire dynamiquement
         enquete = aff.get("enquetes", {})
@@ -536,21 +536,59 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
     total_completions = sum(a["completions_total"] for a in affectations.data)
     total_clics = sum(a["clics"] for a in affectations.data)
 
-    # Calculer valides basé sur les QUOTAS GLOBAUX (table quotas)
-    # Les quotas globaux definissent l'objectif par segment pour toute l'enquete
-    quotas = sb.table("quotas").select("objectif, completions").execute()
+    # Calculer valides avec QUOTAS INDIVIDUELS
+    # Chaque enqueteur a les memes quotas par segment
+    # Total valides = somme des min(completions_enqueteur, quota) pour chaque enqueteur
 
+    # Charger les quotas par enquete
+    all_quotas = sb.table("quotas").select("segmentation_id, segment_value, objectif").is_("affectation_id", "null").execute()
+    all_segmentations = sb.table("segmentations").select("id, enquete_id").execute()
+    seg_to_enquete = {s["id"]: s["enquete_id"] for s in all_segmentations.data}
+
+    # Construire quotas par enquete (normalises)
+    enquete_quotas = {}
+    for q in all_quotas.data:
+        enquete_id = seg_to_enquete.get(q.get("segmentation_id"))
+        if enquete_id:
+            if enquete_id not in enquete_quotas:
+                enquete_quotas[enquete_id] = {}
+            seg_norm = normalize_country_name(q.get("segment_value", ""))
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            enquete_quotas[enquete_id][seg_norm] = q.get("objectif", 0) or 0
+
+    # Charger completions_segments pour toutes les affectations
+    aff_ids = [a["id"] for a in affectations.data]
+    all_segments = sb.table("completions_segments").select("affectation_id, segment_value, completions").in_("affectation_id", aff_ids).execute() if aff_ids else type('obj', (object,), {'data': []})()
+
+    # Indexer par affectation
+    aff_segments = {}
+    for s in all_segments.data:
+        aid = s["affectation_id"]
+        if aid not in aff_segments:
+            aff_segments[aid] = []
+        aff_segments[aid].append(s)
+
+    # Calculer total_valides = somme des valides de chaque affectation
     total_valides = 0
-    for q in quotas.data:
-        completions = q.get("completions", 0) or 0
-        objectif = q.get("objectif", 0) or 0
-        if objectif > 0:
-            # Valide = min(completions, objectif) - les debordements sont exclus
-            total_valides += min(completions, objectif)
-        else:
-            total_valides += completions
+    for aff in affectations.data:
+        enquete_id = aff.get("enquete_id")
+        quotas = enquete_quotas.get(enquete_id, {})
+        segments = aff_segments.get(aff["id"], [])
 
-    # Invalides = tout ce qui n'est pas valide (depassements + non-assignes)
+        # Agreger par segment normalise
+        segments_agreg = {}
+        for seg in segments:
+            seg_val = seg.get("segment_value", "")
+            seg_comp = seg.get("completions", 0) or 0
+            seg_norm = normalize_country_name(seg_val)
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
+
+        for seg_norm, seg_comp in segments_agreg.items():
+            if seg_norm in quotas:
+                total_valides += min(seg_comp, quotas[seg_norm])
+
+    # Invalides = tout ce qui n'est pas valide
     total_invalides = total_completions - total_valides
 
     # Compter enqueteurs sans ADMIN (retro-compatible si is_admin n'existe pas)
@@ -587,42 +625,75 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
     """Liste des enquetes avec stats et completions valides"""
     enquetes = sb.table("enquetes").select("*").order("code").execute()
 
-    # Charger tous les quotas en une requete
-    all_quotas = sb.table("quotas").select("segmentation_id, objectif, completions").execute()
+    # Charger tous les quotas et segmentations
+    all_quotas = sb.table("quotas").select("segmentation_id, segment_value, objectif").is_("affectation_id", "null").execute()
     all_segmentations = sb.table("segmentations").select("id, enquete_id").execute()
-
-    # Mapper segmentation_id -> enquete_id
     seg_to_enquete = {s["id"]: s["enquete_id"] for s in all_segmentations.data}
 
-    # Calculer valides par enquete
-    enquete_valides = {}
+    # Construire quotas par enquete (normalises)
+    enquete_quotas = {}
     for q in all_quotas.data:
         enquete_id = seg_to_enquete.get(q.get("segmentation_id"))
         if enquete_id:
-            if enquete_id not in enquete_valides:
-                enquete_valides[enquete_id] = 0
-            obj = q.get("objectif", 0) or 0
-            comp = q.get("completions", 0) or 0
-            # Valide = min(completions, objectif)
-            enquete_valides[enquete_id] += min(comp, obj) if obj > 0 else comp
+            if enquete_id not in enquete_quotas:
+                enquete_quotas[enquete_id] = {}
+            seg_norm = normalize_country_name(q.get("segment_value", ""))
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            enquete_quotas[enquete_id][seg_norm] = q.get("objectif", 0) or 0
+
+    # Charger toutes les affectations
+    all_affectations = sb.table("affectations").select("id, enquete_id, objectif_total, completions_total, clics").execute()
+
+    # Charger tous les completions_segments
+    aff_ids = [a["id"] for a in all_affectations.data]
+    all_segments = sb.table("completions_segments").select("affectation_id, segment_value, completions").in_("affectation_id", aff_ids).execute() if aff_ids else type('obj', (object,), {'data': []})()
+
+    # Indexer segments par affectation
+    aff_segments = {}
+    for s in all_segments.data:
+        aid = s["affectation_id"]
+        if aid not in aff_segments:
+            aff_segments[aid] = []
+        aff_segments[aid].append(s)
+
+    # Indexer affectations par enquete
+    enquete_affectations = {}
+    for aff in all_affectations.data:
+        eid = aff["enquete_id"]
+        if eid not in enquete_affectations:
+            enquete_affectations[eid] = []
+        enquete_affectations[eid].append(aff)
 
     result = []
     for enq in enquetes.data:
-        affectations = sb.table("affectations")\
-            .select("objectif_total, completions_total, clics")\
-            .eq("enquete_id", enq["id"])\
-            .execute()
+        affectations = enquete_affectations.get(enq["id"], [])
+        quotas = enquete_quotas.get(enq["id"], {})
 
-        # Utiliser taille_echantillon comme objectif principal
         taille_echantillon = enq.get("taille_echantillon", 0)
-        total_objectif_affectations = sum(a["objectif_total"] or 0 for a in affectations.data)
-        total_completions = sum(a["completions_total"] or 0 for a in affectations.data)
-        total_clics = sum(a["clics"] or 0 for a in affectations.data)
-        total_valides = enquete_valides.get(enq["id"], 0)
+        total_objectif_affectations = sum(a["objectif_total"] or 0 for a in affectations)
+        total_completions = sum(a["completions_total"] or 0 for a in affectations)
+        total_clics = sum(a["clics"] or 0 for a in affectations)
+
+        # Calculer total_valides = somme des valides de chaque affectation (quotas individuels)
+        total_valides = 0
+        for aff in affectations:
+            segments = aff_segments.get(aff["id"], [])
+            # Agreger par segment normalise
+            segments_agreg = {}
+            for seg in segments:
+                seg_val = seg.get("segment_value", "")
+                seg_comp = seg.get("completions", 0) or 0
+                seg_norm = normalize_country_name(seg_val)
+                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
+
+            for seg_norm, seg_comp in segments_agreg.items():
+                if seg_norm in quotas:
+                    total_valides += min(seg_comp, quotas[seg_norm])
 
         result.append({
             **enq,
-            "nb_enqueteurs": len(affectations.data),
+            "nb_enqueteurs": len(affectations),
             "total_objectif": taille_echantillon if taille_echantillon > 0 else total_objectif_affectations,
             "total_objectif_affectations": total_objectif_affectations,
             "total_clics": total_clics,
@@ -678,29 +749,25 @@ def get_enquete(id: str, admin: dict = Depends(require_admin), sb: Client = Depe
                 all_segments[aid] = []
             all_segments[aid].append(s)
 
-    # Calculer completions_valides pour chaque affectation
+    # Calculer completions_valides pour chaque affectation (quotas INDIVIDUELS)
     for aff in affectations.data:
         aff_segments = all_segments.get(aff["id"], [])
         completions_valides = 0
 
+        # Agreger les completions par segment normalise
+        segments_agreg = {}
         for seg in aff_segments:
             seg_val = seg.get("segment_value", "")
             seg_comp = seg.get("completions", 0) or 0
             seg_norm = normalize_country_name(seg_val)
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
 
+        for seg_norm, seg_comp in segments_agreg.items():
             if seg_norm in quota_info:
                 objectif = quota_info[seg_norm]["objectif"]
-                comp_globales = quota_info[seg_norm]["completions_globales"]
-
-                if comp_globales > 0 and objectif > 0:
-                    if comp_globales <= objectif:
-                        completions_valides += seg_comp
-                    else:
-                        ratio = objectif / comp_globales
-                        completions_valides += int(seg_comp * ratio)
-                else:
-                    completions_valides += seg_comp
+                # Quota individuel: valides = min(completions, objectif)
+                completions_valides += min(seg_comp, objectif)
 
         aff["completions_valides"] = completions_valides
 
@@ -854,30 +921,27 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
         total_completions = sum(a["completions_total"] or 0 for a in enq_affectations)
         total_clics = sum(a["clics"] or 0 for a in enq_affectations)
 
-        # Calculer completions valides pour cet enqueteur
+        # Calculer completions valides pour cet enqueteur (quotas INDIVIDUELS)
         total_valides = 0
         for aff in enq_affectations:
             enquete_id = aff.get("enquete_id")
             quotas = enquete_quotas.get(enquete_id, {})
             segments = aff_segments.get(aff["id"], [])
 
+            # Agreger les completions par segment normalise
+            segments_agreg = {}
             for seg in segments:
                 seg_val = seg.get("segment_value", "")
                 seg_comp = seg.get("completions", 0) or 0
                 seg_norm = normalize_country_name(seg_val)
                 seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
 
+            for seg_norm, seg_comp in segments_agreg.items():
                 if seg_norm in quotas:
                     obj = quotas[seg_norm]["objectif"]
-                    glob = quotas[seg_norm]["completions_globales"]
-                    if glob > 0 and obj > 0:
-                        if glob <= obj:
-                            total_valides += seg_comp
-                        else:
-                            ratio = obj / glob
-                            total_valides += int(seg_comp * ratio)
-                    else:
-                        total_valides += seg_comp
+                    # Quota individuel: valides = min(completions, objectif)
+                    total_valides += min(seg_comp, obj)
 
         result.append({
             **enq,
@@ -1251,21 +1315,30 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         else:
             pays_non_matches.append(pays_nom)
 
-    # 5. Mettre a jour completions_segments
-    for segment_value, count in segment_counts.items():
-        sb.table("completions_segments").upsert({
-            "affectation_id": affectation_id,
-            "segment_value": segment_value,
-            "completions": count
-        }, on_conflict="affectation_id,segment_value").execute()
+    # 5. Mettre a jour completions_segments avec noms NORMALISES
+    # D'abord supprimer les anciennes entrees pour eviter les doublons
+    sb.table("completions_segments").delete().eq("affectation_id", affectation_id).execute()
 
-    # 6. Mettre a jour aussi completions_segments avec les pays (pour nouveau systeme)
+    # Agreger segment_counts par nom normalise
+    segments_normalized = {}
+    for segment_value, count in segment_counts.items():
+        seg_norm = normalize_country_name(segment_value)
+        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+        segments_normalized[seg_norm] = segments_normalized.get(seg_norm, 0) + count
+
+    # Agreger pays_matched par nom normalise
     for pays_nom, count in pays_matched.items():
-        sb.table("completions_segments").upsert({
+        seg_norm = normalize_country_name(pays_nom)
+        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+        segments_normalized[seg_norm] = segments_normalized.get(seg_norm, 0) + count
+
+    # Inserer les segments normalises
+    for seg_norm, count in segments_normalized.items():
+        sb.table("completions_segments").insert({
             "affectation_id": affectation_id,
-            "segment_value": pays_nom,
+            "segment_value": seg_norm,
             "completions": count
-        }, on_conflict="affectation_id,segment_value").execute()
+        }).execute()
 
     # 7. Calculer les completions valides (attribuees a un pays) vs invalides
     total_attribuees = sum(pays_matched.values())
