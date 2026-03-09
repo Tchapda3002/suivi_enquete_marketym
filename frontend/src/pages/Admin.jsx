@@ -1141,7 +1141,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                     </tr>
                   </thead>
                   <tbody>
-                    {affectations.map(a => {
+                    {[...affectations].sort((a, b) => (b.completions_valides ?? b.completions_total ?? 0) - (a.completions_valides ?? a.completions_total ?? 0)).map(a => {
                       const enqr = a.enqueteurs || {}
                       const statut = STATUTS.find(s => s.value === a.statut) || STATUTS[0]
                       const valides = a.completions_valides ?? a.completions_total ?? 0

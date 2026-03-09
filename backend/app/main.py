@@ -634,7 +634,7 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
 
 @app.get("/admin/enquetes/{id}")
 def get_enquete(id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Detail d'une enquete"""
+    """Detail d'une enquete avec completions_valides par affectation"""
     res = sb.table("enquetes").select("*").eq("id", id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Enquete introuvable")
@@ -644,16 +644,75 @@ def get_enquete(id: str, admin: dict = Depends(require_admin), sb: Client = Depe
         .eq("enquete_id", id)\
         .execute()
 
-    # Recuperer les quotas globaux de l'enquete (si table existe)
-    try:
-        quotas = sb.table("quotas")\
-            .select("*")\
-            .eq("enquete_id", id)\
+    # Recuperer les segmentations et quotas de cette enquete
+    segmentations = sb.table("segmentations").select("id").eq("enquete_id", id).execute()
+    seg_ids = [s["id"] for s in segmentations.data]
+
+    # Construire le mapping des quotas normalises
+    quota_info = {}
+    if seg_ids:
+        quotas_raw = sb.table("quotas")\
+            .select("segment_value, objectif, completions")\
+            .in_("segmentation_id", seg_ids)\
             .is_("affectation_id", "null")\
             .execute()
-        quotas_data = quotas.data
-    except:
-        quotas_data = []
+        for q in quotas_raw.data:
+            seg_norm = normalize_country_name(q.get("segment_value", ""))
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            quota_info[seg_norm] = {
+                "objectif": q.get("objectif", 0) or 0,
+                "completions_globales": q.get("completions", 0) or 0
+            }
+
+    # Recuperer les completions_segments pour toutes les affectations
+    aff_ids = [a["id"] for a in affectations.data]
+    all_segments = {}
+    if aff_ids:
+        segments_data = sb.table("completions_segments")\
+            .select("affectation_id, segment_value, completions")\
+            .in_("affectation_id", aff_ids)\
+            .execute()
+        for s in segments_data.data:
+            aid = s["affectation_id"]
+            if aid not in all_segments:
+                all_segments[aid] = []
+            all_segments[aid].append(s)
+
+    # Calculer completions_valides pour chaque affectation
+    for aff in affectations.data:
+        aff_segments = all_segments.get(aff["id"], [])
+        completions_valides = 0
+
+        for seg in aff_segments:
+            seg_val = seg.get("segment_value", "")
+            seg_comp = seg.get("completions", 0) or 0
+            seg_norm = normalize_country_name(seg_val)
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+
+            if seg_norm in quota_info:
+                objectif = quota_info[seg_norm]["objectif"]
+                comp_globales = quota_info[seg_norm]["completions_globales"]
+
+                if comp_globales > 0 and objectif > 0:
+                    if comp_globales <= objectif:
+                        completions_valides += seg_comp
+                    else:
+                        ratio = objectif / comp_globales
+                        completions_valides += int(seg_comp * ratio)
+                else:
+                    completions_valides += seg_comp
+
+        aff["completions_valides"] = completions_valides
+
+    # Recuperer les quotas globaux pour l'affichage
+    quotas_data = []
+    if seg_ids:
+        quotas_result = sb.table("quotas")\
+            .select("*")\
+            .in_("segmentation_id", seg_ids)\
+            .is_("affectation_id", "null")\
+            .execute()
+        quotas_data = quotas_result.data
 
     return {**res.data[0], "affectations": affectations.data, "quotas": quotas_data}
 
