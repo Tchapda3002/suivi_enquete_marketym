@@ -67,10 +67,11 @@ export default function Dashboard() {
   }
 
   const affectations = enq.affectations || []
-  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_total || 0), 0)
+  // Utiliser completions_valides (completions qui comptent dans les quotas)
+  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
   const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
-  const totalInvalides = affectations.reduce((s, a) => s + (a.invalid_total || 0), 0)
+  const totalInvalides = affectations.reduce((s, a) => s + ((a.completions_total || 0) - (a.completions_valides ?? a.completions_total ?? 0)), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
   const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
 
@@ -323,7 +324,8 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
           <div className="space-y-4">
             {affectations.map(aff => {
               const enquete = aff.enquetes || {}
-              const pct = Math.round((aff.completions_total / Math.max(aff.objectif_total, 1)) * 100)
+              const completions = aff.completions_valides ?? aff.completions_total ?? 0
+              const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
               return (
                 <button
                   key={aff.id}
@@ -339,9 +341,9 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
                     </div>
                     <span className="text-sm font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
                   </div>
-                  <ProgressBar value={aff.completions_total} max={aff.objectif_total} size="sm" />
+                  <ProgressBar value={completions} max={aff.objectif_total} size="sm" />
                   <div className="flex justify-between mt-1 text-xs text-[#9CA3AF]">
-                    <span>{aff.completions_total} / {aff.objectif_total}</span>
+                    <span>{completions} / {aff.objectif_total}</span>
                     <span>{aff.clics} clics</span>
                   </div>
                 </button>
@@ -437,8 +439,10 @@ function EnquetesTab({ affectations, onSelect }) {
         {affectations.map(aff => {
           const enquete = aff.enquetes || {}
           const status = STATUT_CONFIG[aff.statut] || STATUT_CONFIG.en_cours
-          const pct = Math.round((aff.completions_total / Math.max(aff.objectif_total, 1)) * 100)
-          const conversionRate = aff.clics > 0 ? Math.round((aff.completions_total / aff.clics) * 100) : 0
+          const completions = aff.completions_valides ?? aff.completions_total ?? 0
+          const invalides = (aff.completions_total || 0) - completions
+          const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
+          const conversionRate = aff.clics > 0 ? Math.round((completions / aff.clics) * 100) : 0
 
           return (
             <Card
@@ -465,11 +469,11 @@ function EnquetesTab({ affectations, onSelect }) {
               {/* Mini Stats */}
               <div className="grid grid-cols-4 gap-2 mb-3">
                 <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
-                  <p className="text-lg font-bold text-[#059669]">{aff.completions_total}</p>
-                  <p className="text-[10px] text-[#059669]">Completions</p>
+                  <p className="text-lg font-bold text-[#059669]">{completions}</p>
+                  <p className="text-[10px] text-[#059669]">Valides</p>
                 </div>
                 <div className="p-2 rounded-lg bg-[#FEF2F2] text-center">
-                  <p className="text-lg font-bold text-[#DC2626]">{aff.invalid_total || 0}</p>
+                  <p className="text-lg font-bold text-[#DC2626]">{invalides}</p>
                   <p className="text-[10px] text-[#DC2626]">Invalides</p>
                 </div>
                 <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
@@ -482,7 +486,7 @@ function EnquetesTab({ affectations, onSelect }) {
                 </div>
               </div>
 
-              <ProgressBar value={aff.completions_total} max={aff.objectif_total} size="md" />
+              <ProgressBar value={completions} max={aff.objectif_total} size="md" />
               <p className="text-xs text-[#9CA3AF] mt-2 text-right">Objectif: {aff.objectif_total}</p>
             </Card>
           )
@@ -509,9 +513,11 @@ function EnquetesTab({ affectations, onSelect }) {
 function EnqueteDetail({ affectation, onBack }) {
   const enquete = affectation.enquetes || {}
   const status = STATUT_CONFIG[affectation.statut] || STATUT_CONFIG.en_cours
-  const pct = Math.round((affectation.completions_total / Math.max(affectation.objectif_total, 1)) * 100)
+  const completions = affectation.completions_valides ?? affectation.completions_total ?? 0
+  const invalides = (affectation.completions_total || 0) - completions
+  const pct = Math.round((completions / Math.max(affectation.objectif_total, 1)) * 100)
   const conversionRate = affectation.clics > 0
-    ? Math.round((affectation.completions_total / affectation.clics) * 100)
+    ? Math.round((completions / affectation.clics) * 100)
     : 0
 
   return (
@@ -545,9 +551,9 @@ function EnqueteDetail({ affectation, onBack }) {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <KPICard label="Completions" value={affectation.completions_total} subValue={`/ ${affectation.objectif_total}`} color="#059669" />
+        <KPICard label="Valides" value={completions} subValue={`/ ${affectation.objectif_total}`} color="#059669" />
         <KPICard label="Objectif" value={affectation.objectif_total} subValue="reponses" color="#2563EB" />
-        <KPICard label="Invalides" value={affectation.invalid_total || 0} subValue="reponses" color="#DC2626" />
+        <KPICard label="Invalides" value={invalides} subValue="reponses" color="#DC2626" />
         <KPICard label="Clics" value={affectation.clics || 0} subValue="ouvertures" color="#7C3AED" />
         <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
       </div>
@@ -557,7 +563,7 @@ function EnqueteDetail({ affectation, onBack }) {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-[#111827]">Progression globale</h3>
           <span className="text-sm font-mono text-[#6B7280]">
-            {affectation.completions_total} / {affectation.objectif_total}
+            {completions} / {affectation.objectif_total}
           </span>
         </div>
         <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden">
@@ -684,9 +690,9 @@ function ProfilTab({ enqueteur, onUpdate }) {
   })
 
   const affectations = enqueteur.affectations || []
-  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_total || 0), 0)
+  const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
-  const totalInvalides = affectations.reduce((s, a) => s + (a.invalid_total || 0), 0)
+  const totalInvalides = affectations.reduce((s, a) => s + ((a.completions_total || 0) - (a.completions_valides ?? a.completions_total ?? 0)), 0)
 
   const handleEditClick = async () => {
     setError('')
