@@ -2126,7 +2126,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
                     "segment_value": seg_val,
                     "pourcentage": pourcentage,
                     "objectif": objectif,
-                    "valides": valides
+                    "completions": valides
                 })
 
             enquete_segs.append({
