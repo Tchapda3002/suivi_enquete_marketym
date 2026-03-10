@@ -178,6 +178,7 @@ export default function Dashboard() {
           selectedEnquete ? (
             <EnqueteDetail
               affectation={selectedEnquete}
+              segmentations={segmentations}
               onBack={() => setSelectedEnquete(null)}
             />
           ) : (
@@ -384,7 +385,11 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
                 return currentSeg?.segmentations?.map(seg => (
                   <div key={seg.id}>
                     <p className="text-xs font-medium text-[#6B7280] mb-2">{seg.nom}</p>
-                    {seg.quotas.map((q, i) => {
+                    {[...seg.quotas].sort((a, b) => {
+                      const pA = a.objectif > 0 ? (a.completions || 0) / a.objectif : 0
+                      const pB = b.objectif > 0 ? (b.completions || 0) / b.objectif : 0
+                      return pB - pA
+                    }).map((q, i) => {
                       const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
                       const isComplete = pct >= 100
                       return (
@@ -510,7 +515,7 @@ function EnquetesTab({ affectations, onSelect }) {
    ENQUETE DETAIL
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function EnqueteDetail({ affectation, onBack }) {
+function EnqueteDetail({ affectation, segmentations, onBack }) {
   const enquete = affectation.enquetes || {}
   const status = STATUT_CONFIG[affectation.statut] || STATUT_CONFIG.en_cours
   const completions = affectation.completions_valides ?? affectation.completions_total ?? 0
@@ -615,34 +620,36 @@ function EnqueteDetail({ affectation, onBack }) {
             Progression par segment
           </h3>
           <div className="space-y-2.5 max-h-[200px] overflow-y-auto">
-            {affectation.quotas?.length > 0 ? (
-              [...affectation.quotas]
-                .filter(q => q.completions > 0 || q.objectif > 0)
+            {(() => {
+              const enqueteId = affectation.enquete_id || affectation.enquetes?.id
+              const seg = segmentations?.find(s => s.enquete_id === enqueteId)
+              const allQuotas = seg?.segmentations?.flatMap(s => s.quotas) || []
+              const filtered = allQuotas.filter(q => (q.completions || 0) > 0 || (q.objectif || 0) > 0)
                 .sort((a, b) => {
-                  const pctA = a.completions / Math.max(a.objectif, 1)
-                  const pctB = b.completions / Math.max(b.objectif, 1)
+                  const pctA = (a.completions || 0) / Math.max(a.objectif || 1, 1)
+                  const pctB = (b.completions || 0) / Math.max(b.objectif || 1, 1)
                   return pctB - pctA
                 })
-                .map((q, i) => {
-                  const segPct = Math.min(Math.round((q.completions / Math.max(q.objectif, 1)) * 100), 100)
-                  const isComplete = segPct >= 100
-                  return (
-                    <div key={i} className="flex items-center gap-3">
-                      <span className={`w-24 text-sm truncate ${isComplete ? 'text-[#059669] font-medium' : 'text-[#4B5563]'}`} title={q.segment_value}>
-                        {q.segment_value || 'Inconnu'}
-                      </span>
-                      <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
-                        <div className="h-full rounded-full bg-[#059669]" style={{ width: `${segPct}%` }} />
-                      </div>
-                      <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">
-                        {q.completions}/{q.objectif}
-                      </span>
+              return filtered.length > 0 ? filtered.map((q, i) => {
+                const segPct = Math.min(Math.round(((q.completions || 0) / Math.max(q.objectif || 1, 1)) * 100), 100)
+                const isComplete = segPct >= 100
+                return (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className={`w-24 text-sm truncate ${isComplete ? 'text-[#059669] font-medium' : 'text-[#4B5563]'}`} title={q.segment_value}>
+                      {q.segment_value || 'Inconnu'}
+                    </span>
+                    <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
+                      <div className="h-full rounded-full bg-[#059669]" style={{ width: `${segPct}%` }} />
                     </div>
-                  )
-                })
-            ) : (
-              <p className="text-sm text-[#9CA3AF] text-center py-6">Aucun quota defini</p>
-            )}
+                    <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">
+                      {q.completions || 0}/{q.objectif || 0}
+                    </span>
+                  </div>
+                )
+              }) : (
+                <p className="text-sm text-[#9CA3AF] text-center py-6">Aucun quota defini</p>
+              )
+            })()}
           </div>
         </Card>
       </div>

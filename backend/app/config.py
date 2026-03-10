@@ -37,9 +37,6 @@ class Settings:
     # Frontend
     FRONTEND_URL: str = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
-    # Backend (pour les liens de tracking)
-    BACKEND_URL: str = os.environ.get("BACKEND_URL", "http://localhost:8000")
-
     # CORS - Origines autorisees
     @property
     def ALLOWED_ORIGINS(self) -> list:
