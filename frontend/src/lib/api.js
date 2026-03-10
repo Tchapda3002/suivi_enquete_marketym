@@ -120,6 +120,9 @@ export const updateEnqueteur = (id, data) =>
 export const deleteEnqueteur = (id) =>
   API.delete(`/admin/enqueteurs/${id}`).then(r => r.data)
 
+export const migrateIdentifiants = () =>
+  API.post('/admin/enqueteurs/migrate-identifiants').then(r => r.data)
+
 // ══════════════════════════════════════════════════════════════════════════════
 // ADMIN - AFFECTATIONS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -230,11 +233,23 @@ export const getEnqueteurSegmentations = (enqueteurId) =>
 // HISTORIQUE
 // ══════════════════════════════════════════════════════════════════════════════
 
-export const getHistoriqueGlobal = (days = 30) =>
-  API.get(`/admin/historique?days=${days}`).then(r => r.data)
+export const getHistoriqueGlobal = ({ from_date, to_date } = {}) => {
+  const params = new URLSearchParams()
+  if (from_date) params.set('from_date', from_date)
+  if (to_date) params.set('to_date', to_date)
+  return API.get(`/admin/historique?${params}`).then(r => r.data)
+}
 
-export const getHistoriqueEnquete = (enqueteId, days = 30) =>
-  API.get(`/admin/historique/enquete/${enqueteId}?days=${days}`).then(r => r.data)
+export const getHistoriqueEnquete = (enqueteId, { from_date, to_date } = {}) => {
+  const params = new URLSearchParams()
+  if (from_date) params.set('from_date', from_date)
+  if (to_date) params.set('to_date', to_date)
+  return API.get(`/admin/historique/enquete/${enqueteId}?${params}`).then(r => r.data)
+}
 
-export const getHistoriqueEnqueteur = (enqueteurId, days = 30) =>
-  API.get(`/enqueteur/${enqueteurId}/historique?days=${days}`).then(r => r.data)
+export const getHistoriqueEnqueteur = (enqueteurId, { from_date, to_date } = {}) => {
+  const params = new URLSearchParams()
+  if (from_date) params.set('from_date', from_date)
+  if (to_date) params.set('to_date', to_date)
+  return API.get(`/enqueteur/${enqueteurId}/historique?${params}`).then(r => r.data)
+}

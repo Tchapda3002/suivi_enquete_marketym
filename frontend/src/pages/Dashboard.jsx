@@ -31,7 +31,7 @@ export default function Dashboard() {
         const [fresh, segs, hist] = await Promise.all([
           getEnqueteur(data.id),
           getEnqueteurSegmentations(data.id),
-          getHistoriqueEnqueteur(data.id, 30)
+          getHistoriqueEnqueteur(data.id)
         ])
         setEnq(fresh)
         setSegmentations(segs || [])

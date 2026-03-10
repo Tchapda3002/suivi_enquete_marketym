@@ -4,6 +4,7 @@ import {
   getDashboard,
   listEnquetes,
   listEnqueteurs,
+  listAffectations,
   listAffectationsByEnquete,
   updateAffectation,
   syncAll,
@@ -16,6 +17,7 @@ import {
   createEnqueteur,
   updateEnqueteur,
   deleteEnqueteur,
+  migrateIdentifiants,
   createAffectation,
   deleteAffectation,
   getSurveyInfo,
@@ -29,6 +31,7 @@ import {
   deleteQuota,
   getSegmentationsStats,
   getHistoriqueGlobal,
+  getHistoriqueEnquete,
   authRequestProfileOTP,
   authUpdateProfile,
   updateEnqueteurRole,
@@ -49,6 +52,7 @@ export default function Admin() {
   const [enqueteurs, setEnqueteurs] = useState([])
   const [segmentationsStats, setSegmentationsStats] = useState([])
   const [historique, setHistorique] = useState([])
+  const [allAffectations, setAllAffectations] = useState([])
   const [selectedEnquete, setSelectedEnquete] = useState(null)
   const [selectedEnqueteur, setSelectedEnqueteur] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -56,6 +60,14 @@ export default function Admin() {
   const [search, setSearch] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [adminUser, setAdminUser] = useState(null)
+  const [dateRange, setDateRange] = useState(() => {
+    const today = new Date().toISOString().split('T')[0]
+    return {
+      from_date: today,
+      to_date: today,
+      preset: '1j'
+    }
+  })
 
   // Mes enquetes (affectations personnelles de l'admin)
   const [adminAffectations, setAdminAffectations] = useState([])
@@ -79,23 +91,26 @@ export default function Admin() {
     loadAll(user.id)
   }, [nav])
 
-  async function loadAll(adminId) {
+  async function loadAll(adminId, range) {
     setLoading(true)
+    const dr = range || dateRange
     try {
       const userId = adminId || adminUser?.id
       // Charger les données principales
-      const [d, e, enq, segStats, hist] = await Promise.all([
+      const [d, e, enq, segStats, hist, affs] = await Promise.all([
         getDashboard(),
         listEnquetes(),
         listEnqueteurs(),
         getSegmentationsStats(),
-        getHistoriqueGlobal(30)
+        getHistoriqueGlobal({ from_date: dr.from_date, to_date: dr.to_date }),
+        listAffectations()
       ])
       setDashboard(d)
       setEnquetes(e)
       setEnqueteurs(enq)
       setSegmentationsStats(segStats)
       setHistorique(hist || [])
+      setAllAffectations(affs || [])
 
       // Charger les données "Mes enquetes" separement (pour ne pas bloquer si erreur)
       if (userId) {
@@ -103,7 +118,7 @@ export default function Admin() {
           const [adminData, adminSegs, adminHist] = await Promise.all([
             getEnqueteur(userId),
             getEnqueteurSegmentations(userId),
-            getHistoriqueEnqueteur(userId, 30)
+            getHistoriqueEnqueteur(userId, { from_date: dr.from_date, to_date: dr.to_date })
           ])
           setAdminAffectations(adminData?.affectations || [])
           setAdminSegmentations(adminSegs || [])
@@ -119,6 +134,21 @@ export default function Admin() {
       console.error('Erreur chargement dashboard:', err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function reloadHistorique(range) {
+    const dr = range || dateRange
+    const userId = adminUser?.id
+    try {
+      const [hist, adminHist] = await Promise.all([
+        getHistoriqueGlobal({ from_date: dr.from_date, to_date: dr.to_date }),
+        userId ? getHistoriqueEnqueteur(userId, { from_date: dr.from_date, to_date: dr.to_date }) : Promise.resolve([])
+      ])
+      setHistorique(hist || [])
+      setAdminHistorique(adminHist || [])
+    } catch (err) {
+      console.error('Erreur rechargement historique:', err)
     }
   }
 
@@ -164,9 +194,9 @@ export default function Admin() {
   }
 
   return (
-    <div className="min-h-screen flex bg-[#F9FAFB]">
+    <div className="h-screen flex overflow-hidden bg-[#F9FAFB]">
       {/* SIDEBAR */}
-      <aside className={`flex-shrink-0 flex flex-col border-r border-[#E5E7EB] bg-white transition-all duration-200 ${sidebarCollapsed ? 'w-[68px]' : 'w-[260px]'}`}>
+      <aside className={`flex-shrink-0 flex flex-col border-r border-[#E5E7EB] bg-white transition-all duration-200 h-full overflow-y-auto ${sidebarCollapsed ? 'w-[68px]' : 'w-[260px]'}`}>
         {/* Header */}
         <div className="p-4 border-b border-[#E5E7EB]">
           <div className="flex items-center gap-3">
@@ -299,8 +329,14 @@ export default function Admin() {
             dashboard={dashboard}
             enquetes={enquetes}
             enqueteurs={enqueteurs}
+            allAffectations={allAffectations}
             segmentationsStats={segmentationsStats}
             historique={historique}
+            dateRange={dateRange}
+            onDateRangeChange={(range) => {
+              setDateRange(range)
+              reloadHistorique(range)
+            }}
           />
         ) : view === 'enqueteurs' ? (
           selectedEnqueteur ? (
@@ -615,6 +651,56 @@ function NavButton({ icon, label, active, collapsed, onClick, badge }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
+   SORTABLE TABLE
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function useSortable(defaultKey = null, defaultDir = 'desc') {
+  const [sortKey, setSortKey] = useState(defaultKey)
+  const [sortDir, setSortDir] = useState(defaultDir)
+
+  function toggleSort(key) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('desc') }
+  }
+
+  function sorted(data, getters) {
+    if (!sortKey || !getters[sortKey]) return data
+    return [...data].sort((a, b) => {
+      const va = getters[sortKey](a)
+      const vb = getters[sortKey](b)
+      if (va == null) return 1
+      if (vb == null) return -1
+      if (typeof va === 'string') return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
+      return sortDir === 'asc' ? va - vb : vb - va
+    })
+  }
+
+  return { sortKey, sortDir, toggleSort, sorted }
+}
+
+function SortableHeader({ label, k, sortKey, sortDir, onSort, align = 'left', className = '' }) {
+  const active = sortKey === k
+  return (
+    <th
+      onClick={() => onSort(k)}
+      className={`px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase cursor-pointer select-none hover:text-[#111827] transition-colors ${align === 'center' ? 'text-center' : 'text-left'} ${className}`}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        <span className="inline-flex flex-col gap-[1px]">
+          <svg width="7" height="5" viewBox="0 0 7 5" fill={active && sortDir === 'asc' ? '#059669' : '#D1D5DB'}>
+            <path d="M3.5 0L7 5H0L3.5 0Z"/>
+          </svg>
+          <svg width="7" height="5" viewBox="0 0 7 5" fill={active && sortDir === 'desc' ? '#059669' : '#D1D5DB'}>
+            <path d="M3.5 5L0 0H7L3.5 5Z"/>
+          </svg>
+        </span>
+      </span>
+    </th>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
    PROGRESS BAR
    ══════════════════════════════════════════════════════════════════════════════ */
 
@@ -692,24 +778,149 @@ function KPICard({ label, value, icon, color, bgColor }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
+   DATE RANGE PICKER
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+const DATE_PRESETS = [
+  { label: '1j',  days: 0 },
+  { label: '7j',  days: 6 },
+  { label: '30j', days: 29 },
+  { label: '90j', days: 89 },
+  { label: 'Cette année', days: null, yearStart: true },
+]
+
+function computePresetRange(preset) {
+  const today = new Date()
+  const to = today.toISOString().split('T')[0]
+  if (preset.yearStart) {
+    return { from_date: `${today.getFullYear()}-01-01`, to_date: to, preset: 'Cette année' }
+  }
+  const from = new Date(today)
+  from.setDate(from.getDate() - preset.days)
+  return { from_date: from.toISOString().split('T')[0], to_date: to, preset: preset.label }
+}
+
+function DateRangePicker({ value, onChange }) {
+  const [showCustom, setShowCustom] = useState(false)
+  const [customFrom, setCustomFrom] = useState(value?.from_date || '')
+  const [customTo, setCustomTo] = useState(value?.to_date || '')
+
+  function applyPreset(preset) {
+    setShowCustom(false)
+    onChange(computePresetRange(preset))
+  }
+
+  function applyCustom() {
+    if (!customFrom || !customTo) return
+    onChange({ from_date: customFrom, to_date: customTo, preset: 'custom' })
+    setShowCustom(false)
+  }
+
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      {DATE_PRESETS.map(p => (
+        <button
+          key={p.label}
+          onClick={() => applyPreset(p)}
+          className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+            value?.preset === p.label
+              ? 'bg-[#111827] text-white'
+              : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+          }`}
+        >
+          {p.label}
+        </button>
+      ))}
+      <button
+        onClick={() => setShowCustom(v => !v)}
+        className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+          value?.preset === 'custom'
+            ? 'bg-[#111827] text-white'
+            : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+        }`}
+      >
+        Perso
+      </button>
+      {showCustom && (
+        <div className="flex items-center gap-1 ml-1">
+          <input
+            type="date"
+            value={customFrom}
+            onChange={e => setCustomFrom(e.target.value)}
+            className="text-xs border border-[#E5E7EB] rounded px-1 py-0.5"
+          />
+          <span className="text-xs text-[#6B7280]">→</span>
+          <input
+            type="date"
+            value={customTo}
+            onChange={e => setCustomTo(e.target.value)}
+            className="text-xs border border-[#E5E7EB] rounded px-1 py-0.5"
+          />
+          <button
+            onClick={applyCustom}
+            className="px-2 py-0.5 rounded text-xs font-medium bg-[#059669] text-white hover:bg-[#047857]"
+          >
+            OK
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
    DASHBOARD VIEW
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, historique }) {
+function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segmentationsStats, historique, dateRange, onDateRangeChange }) {
   const [statutFilter, setStatutFilter] = useState('all')
   const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
+  const topSort = useSortable('valides', 'desc')
 
-  // Filtrer les enquetes par statut
+  // Filtre multi-enquetes
+  const [selectedEnqueteIds, setSelectedEnqueteIds] = useState([])
+  const [showEnqueteFilter, setShowEnqueteFilter] = useState(false)
+  const [filteredHistorique, setFilteredHistorique] = useState(null)
+
+  function toggleEnquete(id) {
+    setSelectedEnqueteIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    )
+  }
+
+  useEffect(() => {
+    if (selectedEnqueteIds.length === 0) {
+      setFilteredHistorique(null)
+      return
+    }
+    Promise.all(
+      selectedEnqueteIds.map(id =>
+        getHistoriqueEnquete(id, { from_date: dateRange?.from_date, to_date: dateRange?.to_date })
+      )
+    ).then(results => {
+      const combined = {}
+      results.flat().forEach(d => {
+        if (!combined[d.date]) combined[d.date] = { date: d.date, completions: 0 }
+        combined[d.date].completions += d.completions || 0
+      })
+      setFilteredHistorique(Object.values(combined).sort((a, b) => a.date.localeCompare(b.date)))
+    }).catch(() => setFilteredHistorique(null))
+  }, [selectedEnqueteIds, dateRange])
+
+  const displayHistorique = filteredHistorique !== null ? filteredHistorique : historique
+
+  // Filtrer les enquetes par statut ET par selection
   const filteredEnquetes = useMemo(() => {
-    if (statutFilter === 'all') return enquetes
-    return enquetes.filter(e => e.statut === statutFilter)
-  }, [enquetes, statutFilter])
+    let base = selectedEnqueteIds.length > 0 ? enquetes.filter(e => selectedEnqueteIds.includes(e.id)) : enquetes
+    if (statutFilter === 'all') return base
+    return base.filter(e => e.statut === statutFilter)
+  }, [enquetes, statutFilter, selectedEnqueteIds])
 
   const enquetesStats = filteredEnquetes.map(e => ({
     ...e,
     valides: e.total_valides ?? e.total_completions ?? 0,
     pct: e.total_objectif > 0 ? Math.round(((e.total_valides ?? e.total_completions ?? 0) / e.total_objectif) * 100) : 0,
-    tauxConversion: e.total_clics > 0 ? Math.round(((e.total_valides ?? e.total_completions ?? 0) / e.total_clics) * 100) : 0
+    tauxConversion: e.total_clics > 0 ? Math.min(100, Math.round(((e.total_valides ?? e.total_completions ?? 0) / e.total_clics) * 100)) : 0
   })).sort((a, b) => (b.valides || 0) - (a.valides || 0))  // Tri par completions valides décroissantes
 
   // Stats filtrees
@@ -717,11 +928,11 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
   const filteredTotalValides = filteredEnquetes.reduce((sum, e) => sum + (e.total_valides ?? e.total_completions ?? 0), 0)
   const filteredTotalClics = filteredEnquetes.reduce((sum, e) => sum + (e.total_clics || 0), 0)
   const filteredPct = filteredTotalObjectif > 0 ? Math.round((filteredTotalValides / filteredTotalObjectif) * 100) : 0
-  const filteredTauxConversion = filteredTotalClics > 0 ? Math.round((filteredTotalValides / filteredTotalClics) * 100) : 0
+  const filteredTauxConversion = filteredTotalClics > 0 ? Math.min(100, Math.round((filteredTotalValides / filteredTotalClics) * 100)) : 0
 
   // Taux de conversion global
   const tauxConversionGlobal = (dashboard?.total_clics || 0) > 0
-    ? Math.round(((dashboard?.total_valides || 0) / (dashboard?.total_clics || 1)) * 100)
+    ? Math.min(100, Math.round(((dashboard?.total_valides || 0) / (dashboard?.total_clics || 1)) * 100))
     : 0
 
   return (
@@ -731,8 +942,50 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
           <h1 className="text-2xl font-bold text-[#111827]">Tableau de bord</h1>
           <p className="text-sm text-[#6B7280]">Vue d'ensemble de toutes les enquetes</p>
         </div>
-        {/* Filtre par statut */}
-        <div className="flex gap-2">
+        <div className="flex items-center gap-3">
+          {/* Filtre multi-enquetes */}
+          <div className="relative">
+            <button
+              onClick={() => setShowEnqueteFilter(v => !v)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                selectedEnqueteIds.length > 0
+                  ? 'bg-[#059669] text-white border-[#059669]'
+                  : 'bg-white text-[#374151] border-[#E5E7EB] hover:bg-[#F9FAFB]'
+              }`}
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M7 12h10M11 18h2"/></svg>
+              {selectedEnqueteIds.length === 0 ? 'Toutes les enquetes' : `${selectedEnqueteIds.length} enquete${selectedEnqueteIds.length > 1 ? 's' : ''}`}
+              <svg className={`w-3 h-3 transition-transform ${showEnqueteFilter ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            {showEnqueteFilter && (
+              <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-lg shadow-lg border border-[#E5E7EB] z-50 py-1">
+                <div className="px-3 py-2 border-b border-[#E5E7EB] flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#6B7280] uppercase">Filtrer par enquete</span>
+                  {selectedEnqueteIds.length > 0 && (
+                    <button onClick={() => setSelectedEnqueteIds([])} className="text-xs text-[#059669] hover:underline">Tout effacer</button>
+                  )}
+                </div>
+                <div className="max-h-56 overflow-y-auto">
+                  {enquetes.map(e => (
+                    <label key={e.id} className="flex items-center gap-2 px-3 py-2 hover:bg-[#F9FAFB] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedEnqueteIds.includes(e.id)}
+                        onChange={() => toggleEnquete(e.id)}
+                        className="w-4 h-4 rounded accent-[#059669]"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-[#111827] truncate">{e.nom}</p>
+                        <p className="text-xs text-[#9CA3AF]">{e.code}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            </div>
+          {/* Filtre par statut */}
+          <div className="flex gap-2">
           <button
             onClick={() => setStatutFilter('all')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -765,11 +1018,12 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
           >
             Archivees ({dashboard?.nb_enquetes_archivees || 0})
           </button>
+          </div>
         </div>
       </div>
 
       {/* KPIs - adaptes au filtre */}
-      {statutFilter === 'all' ? (
+      {statutFilter === 'all' && selectedEnqueteIds.length === 0 ? (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <KPICard label="Valides" value={dashboard?.total_valides || 0} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
           <KPICard label="Invalides" value={dashboard?.total_invalides || 0} icon={<XIcon />} color="#DC2626" bgColor="#FEF2F2" />
@@ -795,35 +1049,39 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
               Progression {statutFilter !== 'all' ? `(${statutFilter === 'en_cours' ? 'En cours' : statutFilter === 'termine' ? 'Terminees' : 'Archivees'})` : 'Globale'}
             </h3>
             <span className="text-2xl font-bold text-[#059669]">
-              {statutFilter === 'all' ? (dashboard?.taux_completion || 0) : filteredPct}%
+              {(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.taux_completion || 0) : filteredPct}%
             </span>
           </div>
           <ProgressBar
-            value={statutFilter === 'all' ? (dashboard?.total_valides || 0) : filteredTotalValides}
-            max={statutFilter === 'all' ? (dashboard?.total_objectif || 1) : (filteredTotalObjectif || 1)}
+            value={(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.total_valides || 0) : filteredTotalValides}
+            max={(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.total_objectif || 1) : (filteredTotalObjectif || 1)}
             size="lg"
           />
           <div className="flex justify-between mt-2 text-xs">
             <span className="text-[#059669] font-medium">
-              {statutFilter === 'all' ? (dashboard?.total_valides || 0) : filteredTotalValides} valides
+              {(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.total_valides || 0) : filteredTotalValides} valides
             </span>
             <span className="text-[#6B7280]">
-              Echantillon: {statutFilter === 'all' ? (dashboard?.total_objectif || 0) : filteredTotalObjectif}
+              Echantillon: {(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.total_objectif || 0) : filteredTotalObjectif}
             </span>
           </div>
         </Card>
 
-        {/* Courbe d'evolution */}
+        {/* Evolution */}
         <Card className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-[#111827]">Evolution (30 jours)</h3>
-            {historique && historique.length > 0 && (
-              <span className="text-xs text-[#6B7280]">
-                {historique.length} jours
-              </span>
-            )}
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-semibold text-[#111827]">Evolution</h3>
+            <DateRangePicker value={dateRange} onChange={onDateRangeChange} />
           </div>
-          <LineChart data={historique} height={120} color="#059669" />
+          <div className="flex flex-col items-center justify-center py-4">
+            <p className="text-5xl font-bold text-[#059669]">
+              {displayHistorique.reduce((sum, d) => sum + (d.completions || 0), 0)}
+            </p>
+            <p className="text-sm text-[#6B7280] mt-2">completions collectées</p>
+            <p className="text-xs text-[#9CA3AF] mt-1">
+              {dateRange?.from_date} → {dateRange?.to_date}
+            </p>
+          </div>
         </Card>
       </div>
 
@@ -864,7 +1122,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-[#111827]">Segmentations</h3>
             <div className="flex gap-2">
-              {segmentationsStats.map(enqSeg => (
+              {segmentationsStats.filter(s => selectedEnqueteIds.length === 0 || selectedEnqueteIds.includes(s.enquete_id)).map(enqSeg => (
                 <button
                   key={enqSeg.enquete_id}
                   onClick={() => setSelectedSegEnquete(selectedSegEnquete === enqSeg.enquete_id ? null : enqSeg.enquete_id)}
@@ -883,7 +1141,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
           {selectedSegEnquete ? (
             <div>
               {segmentationsStats
-                .filter(s => s.enquete_id === selectedSegEnquete)
+                .filter(s => s.enquete_id === selectedSegEnquete && (selectedEnqueteIds.length === 0 || selectedEnqueteIds.includes(s.enquete_id)))
                 .map(enqSeg => (
                   <div key={enqSeg.enquete_id}>
                     {enqSeg.segmentations.map(seg => (
@@ -891,21 +1149,17 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
                         <p className="text-sm font-medium text-[#374151] mb-2">{seg.nom}</p>
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
                           {seg.quotas.slice(0, 8).map(q => {
-                            const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
+                            const pct = q.objectif > 0 ? Math.round(((q.valides || 0) / q.objectif) * 100) : 0
                             return (
-                              <div key={q.id} className="p-2 bg-[#F9FAFB] rounded-lg">
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="text-xs text-[#374151] truncate">{q.segment_value}</span>
-                                  <span className="text-xs font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
-                                </div>
-                                <ProgressBar value={q.completions || 0} max={q.objectif} size="sm" />
-                                <div className="flex justify-between mt-1 text-[9px] text-[#6B7280]">
-                                  <span>{q.completions || 0}</span>
-                                  <span>/ {q.objectif}</span>
-                                </div>
+                            <div key={q.id} className="p-2 bg-[#F9FAFB] rounded-lg">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-[#374151] truncate">{q.segment_value}</span>
+                                <span className="text-xs font-semibold" style={{ color: pct >= 100 ? '#059669' : pct >= 50 ? '#D97706' : '#DC2626' }}>{pct}%</span>
                               </div>
-                            )
-                          })}
+                              <p className="text-xs text-[#9CA3AF]">{q.valides || 0} / {q.objectif || 0}</p>
+                            </div>
+                          )})}
+
                         </div>
                         {seg.quotas.length > 8 && (
                           <p className="text-xs text-[#9CA3AF] mt-2">+ {seg.quotas.length - 8} autres</p>
@@ -928,14 +1182,26 @@ function DashboardView({ dashboard, enquetes, enqueteurs, segmentationsStats, hi
           <table className="w-full">
             <thead>
               <tr className="border-b border-[#E5E7EB]">
-                <th className="text-left py-2 text-[10px] font-semibold text-[#6B7280] uppercase">#</th>
-                <th className="text-left py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Enqueteur</th>
-                <th className="text-center py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Valides</th>
-                <th className="py-2 text-[10px] font-semibold text-[#6B7280] uppercase">Progression</th>
+                <th className="text-left py-2 px-4 text-[10px] font-semibold text-[#6B7280] uppercase">#</th>
+                <SortableHeader label="Enqueteur" k="nom" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} className="py-2" />
+                <SortableHeader label="Valides" k="valides" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} align="center" className="py-2" />
+                <SortableHeader label="Progression" k="pct" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} className="py-2" />
               </tr>
             </thead>
             <tbody>
-              {enqueteurs.sort((a, b) => (b.total_completions_valides ?? b.total_completions ?? 0) - (a.total_completions_valides ?? a.total_completions ?? 0)).slice(0, 5).map((enq, i) => {
+              {topSort.sorted((() => {
+                if (selectedEnqueteIds.length === 0) return enqueteurs
+                const enqueteurIds = new Set(
+                  allAffectations
+                    .filter(a => selectedEnqueteIds.includes(a.enquete_id))
+                    .map(a => a.enqueteur_id)
+                )
+                return enqueteurs.filter(e => enqueteurIds.has(e.id))
+              })(), {
+                nom: e => `${e.nom} ${e.prenom}`,
+                valides: e => e.total_completions_valides ?? e.total_completions ?? 0,
+                pct: e => e.total_objectif > 0 ? Math.round(((e.total_completions_valides ?? e.total_completions ?? 0) / e.total_objectif) * 100) : 0,
+              }).slice(0, 5).map((enq, i) => {
                 const valides = enq.total_completions_valides ?? enq.total_completions ?? 0
                 const pct = enq.total_objectif > 0 ? Math.round((valides / enq.total_objectif) * 100) : 0
                 return (
@@ -1051,6 +1317,7 @@ function EnquetesListView({ enquetes, onSelect, onAdd, onEdit, onDelete, isSuper
 function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onDelete, onAddAffectation, isSuperAdmin }) {
   const [activeTab, setActiveTab] = useState('affectations')
   const [affectations, setAffectations] = useState([])
+  const affSort = useSortable('valides', 'desc')
   const [segmentations, setSegmentations] = useState([])
   const [loading, setLoading] = useState(true)
   const [editAff, setEditAff] = useState(null)
@@ -1200,16 +1467,22 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                 <table className="w-full">
                   <thead>
                     <tr className="bg-[#F9FAFB] border-b border-[#E5E7EB]">
-                      <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Enqueteur</th>
-                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Clics</th>
-                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Valides</th>
-                      <th className="px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Progression</th>
-                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Statut</th>
+                      <SortableHeader label="Enqueteur" k="nom" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} />
+                      <SortableHeader label="Clics" k="clics" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
+                      <SortableHeader label="Valides" k="valides" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
+                      <SortableHeader label="Progression" k="pct" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} />
+                      <SortableHeader label="Statut" k="statut" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
                       <th className="px-4 py-3"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {[...affectations].sort((a, b) => (b.completions_valides ?? b.completions_total ?? 0) - (a.completions_valides ?? a.completions_total ?? 0)).map(a => {
+                    {affSort.sorted(affectations, {
+                      nom: a => `${a.enqueteurs?.nom || ''} ${a.enqueteurs?.prenom || ''}`,
+                      clics: a => a.clics || 0,
+                      valides: a => a.completions_valides ?? a.completions_total ?? 0,
+                      pct: a => Math.round(((a.completions_valides ?? a.completions_total ?? 0) / Math.max(a.objectif_total, 1)) * 100),
+                      statut: a => a.statut || '',
+                    }).map(a => {
                       const enqr = a.enqueteurs || {}
                       const statut = STATUTS.find(s => s.value === a.statut) || STATUTS[0]
                       const valides = a.completions_valides ?? a.completions_total ?? 0
@@ -1313,10 +1586,11 @@ function SegmentationsTab({ enquete, segmentations, onRefresh }) {
     // 2. Creer les quotas si fournis
     if (data.quotas && data.quotas.length > 0) {
       await createQuotasBulk({
+        enquete_id: enquete.id,
         segmentation_id: seg.id,
         quotas: data.quotas.map(q => ({
           segment_value: q.text,
-          objectif: q.objectif
+          pourcentage: q.pourcentage
         }))
       })
     }
@@ -1408,8 +1682,7 @@ function SegmentationCard({ segmentation, isExpanded, onToggle, onDelete }) {
     loadQuotas()
   }
 
-  const totalObjectif = quotas.reduce((s, q) => s + (q.objectif || 0), 0)
-  const totalCompletions = quotas.reduce((s, q) => s + (q.completions || 0), 0)
+  const totalPourcentage = quotas.reduce((s, q) => s + (q.pourcentage || 0), 0)
 
   return (
     <Card className="overflow-hidden">
@@ -1430,7 +1703,7 @@ function SegmentationCard({ segmentation, isExpanded, onToggle, onDelete }) {
         </div>
         <div className="flex items-center gap-4">
           <div className="text-right">
-            <p className="text-sm font-mono font-medium text-[#111827]">{totalCompletions}/{totalObjectif}</p>
+            <p className="text-sm font-mono font-medium text-[#111827]">{totalPourcentage}%</p>
             <p className="text-xs text-[#6B7280]">{quotas.length} quotas</p>
           </div>
           <button
@@ -1459,13 +1732,15 @@ function SegmentationCard({ segmentation, isExpanded, onToggle, onDelete }) {
                 <p className="text-sm text-[#9CA3AF] text-center py-4">Aucun quota defini</p>
               ) : (
                 <div className="space-y-2">
-                  {[...quotas].sort((a, b) => (b.completions || 0) - (a.completions || 0)).map(q => (
+                  {[...quotas].sort((a, b) => (b.pourcentage || 0) - (a.pourcentage || 0)).map(q => {
+                    const pct = q.objectif > 0 ? Math.round(((q.valides || 0) / q.objectif) * 100) : 0
+                    return (
                     <div key={q.id} className="flex items-center gap-3 p-2 bg-white rounded-lg">
                       <span className="flex-1 text-sm text-[#111827]">{q.segment_value}</span>
-                      <span className="text-sm font-mono text-[#059669]">{q.completions || 0}</span>
-                      <span className="text-xs text-[#9CA3AF]">/</span>
-                      <span className="text-sm font-mono text-[#6B7280]">{q.objectif}</span>
-                      <ProgressBar value={q.completions || 0} max={q.objectif} size="sm" className="w-20" />
+                      <span className="text-xs text-[#9CA3AF]">{q.pourcentage}%</span>
+                      <span className="text-sm font-mono text-[#059669] w-24 text-right">{q.valides || 0}/{q.objectif || 0}</span>
+                      <span className="text-xs font-semibold w-10 text-right" style={{ color: pct >= 100 ? '#059669' : pct >= 50 ? '#D97706' : '#DC2626' }}>{pct}%</span>
+                      <ProgressBar value={q.valides || 0} max={q.objectif || 1} size="sm" className="w-20" />
                       <button
                         onClick={() => handleDeleteQuota(q.id)}
                         className="p-1 rounded hover:bg-[#FEF2F2] text-[#DC2626]"
@@ -1473,7 +1748,7 @@ function SegmentationCard({ segmentation, isExpanded, onToggle, onDelete }) {
                         <TrashIcon />
                       </button>
                     </div>
-                  ))}
+                  )})}
                 </div>
               )}
             </>
@@ -1494,34 +1769,60 @@ function SegmentationCard({ segmentation, isExpanded, onToggle, onDelete }) {
 
 function AddSegmentationModal({ questions, loading, onClose, onSave }) {
   const [form, setForm] = useState({ question_id: '', question_text: '', nom: '' })
-  const [quotas, setQuotas] = useState([]) // [{text: "Cote d'Ivoire", objectif: 0}, ...]
+  const [quotas, setQuotas] = useState([]) // [{text: "Cote d'Ivoire", pourcentage: 0}, ...]
   const [saving, setSaving] = useState(false)
+  const [modeManuel, setModeManuel] = useState(false)
+  const [newModalite, setNewModalite] = useState('')
+
+  const totalPct = quotas.reduce((s, q) => s + (q.pourcentage || 0), 0)
+  const totalValide = Math.abs(totalPct - 100) < 0.01
 
   function handleSelectQuestion(qId) {
     const q = questions.find(x => x.id === qId)
-    setForm({
-      question_id: qId,
-      question_text: q?.text || '',
-      nom: '',
-    })
-    // Pre-remplir les quotas avec les modalites de la question
-    if (q?.answers) {
-      setQuotas(q.answers.map(a => ({ text: a.text, objectif: 0 })))
+    setForm({ question_id: qId, question_text: q?.text || '', nom: '' })
+    if (q?.answers?.length > 0) {
+      setQuotas(q.answers.map(a => ({ text: a.text, pourcentage: 0 })))
+      setModeManuel(false)
     } else {
       setQuotas([])
+      setModeManuel(true)
     }
   }
 
-  function updateQuotaObjectif(index, value) {
-    setQuotas(prev => prev.map((q, i) => i === index ? { ...q, objectif: parseInt(value) || 0 } : q))
+  function updateQuotaPourcentage(index, value) {
+    setQuotas(prev => prev.map((q, i) => i === index ? { ...q, pourcentage: parseFloat(value) || 0 } : q))
+  }
+
+  function distribuerEquitablement() {
+    if (quotas.length === 0) return
+    const pct = Math.round((100 / quotas.length) * 10) / 10
+    const reste = Math.round((100 - pct * (quotas.length - 1)) * 10) / 10
+    setQuotas(prev => prev.map((q, i) => ({ ...q, pourcentage: i === prev.length - 1 ? reste : pct })))
+  }
+
+  function ajouterModalite() {
+    const val = newModalite.trim()
+    if (!val) return
+    setQuotas(prev => [...prev, { text: val, pourcentage: 0 }])
+    setNewModalite('')
+  }
+
+  function supprimerModalite(index) {
+    setQuotas(prev => prev.filter((_, i) => i !== index))
   }
 
   async function handleSubmit() {
-    if (!form.question_id || !form.nom) return alert('Remplissez tous les champs')
+    if (!form.nom) return alert('Donnez un nom a la segmentation')
+    if (!form.question_id && !modeManuel) return alert('Selectionnez une question')
+    if (quotas.length === 0) return alert('Ajoutez au moins une modalite')
+    const quotasToCreate = quotas.filter(q => q.pourcentage > 0)
+    if (quotasToCreate.length === 0) return alert('Definissez les pourcentages (au moins un > 0)')
+    if (!totalValide) {
+      const ok = window.confirm(`Le total est ${totalPct.toFixed(1)}% (objectif 100%). Continuer quand meme ?`)
+      if (!ok) return
+    }
     setSaving(true)
     try {
-      // Filtrer les quotas avec objectif > 0
-      const quotasToCreate = quotas.filter(q => q.objectif > 0)
       await onSave({ ...form, quotas: quotasToCreate })
     } finally {
       setSaving(false)
@@ -1531,10 +1832,15 @@ function AddSegmentationModal({ questions, loading, onClose, onSave }) {
   return (
     <Modal isOpen={true} onClose={onClose} title="Nouvelle segmentation">
       <div className="space-y-4">
+        {/* Question QuestionPro */}
         <div>
           <label className="block text-xs font-medium text-[#374151] mb-1.5">Question QuestionPro *</label>
           {loading ? (
             <div className="flex justify-center py-4"><Spinner /></div>
+          ) : questions.length === 0 ? (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+              Impossible de charger les questions QuestionPro. Utilisez le mode manuel.
+            </div>
           ) : (
             <select
               value={form.question_id}
@@ -1548,6 +1854,8 @@ function AddSegmentationModal({ questions, loading, onClose, onSave }) {
             </select>
           )}
         </div>
+
+        {/* Nom */}
         <div>
           <label className="block text-xs font-medium text-[#374151] mb-1.5">Nom de la segmentation *</label>
           <input
@@ -1559,31 +1867,90 @@ function AddSegmentationModal({ questions, loading, onClose, onSave }) {
         </div>
 
         {/* Modalites et quotas */}
-        {quotas.length > 0 && (
-          <div>
-            <label className="block text-xs font-medium text-[#374151] mb-1.5">
-              Quotas par modalite ({quotas.length} modalites)
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-medium text-[#374151]">
+              Modalites &amp; quotas ({quotas.length})
             </label>
-            <div className="max-h-60 overflow-y-auto border border-[#E5E7EB] rounded-lg">
+            <div className="flex gap-2">
+              {quotas.length > 0 && (
+                <button
+                  type="button"
+                  onClick={distribuerEquitablement}
+                  className="text-xs text-[#059669] hover:underline"
+                >
+                  Distribuer equitablement
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setModeManuel(m => !m)}
+                className="text-xs text-[#6B7280] hover:underline"
+              >
+                {modeManuel ? 'Fermer ajout manuel' : '+ Ajouter manuellement'}
+              </button>
+            </div>
+          </div>
+
+          {/* Ajouter une modalite manuellement */}
+          {modeManuel && (
+            <div className="flex gap-2 mb-2">
+              <input
+                value={newModalite}
+                onChange={e => setNewModalite(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && ajouterModalite()}
+                placeholder="Ex: Cote d'Ivoire"
+                className="flex-1 bg-white border border-[#D1D5DB] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#059669]"
+              />
+              <button
+                type="button"
+                onClick={ajouterModalite}
+                className="px-3 py-1.5 bg-[#059669] text-white rounded-lg text-sm hover:bg-[#047857]"
+              >
+                Ajouter
+              </button>
+            </div>
+          )}
+
+          {quotas.length === 0 ? (
+            <p className="text-xs text-[#9CA3AF] text-center py-4 border border-dashed border-[#E5E7EB] rounded-lg">
+              {form.question_id ? 'Aucune modalite trouvee pour cette question' : 'Selectionnez une question ou ajoutez des modalites manuellement'}
+            </p>
+          ) : (
+            <div className="max-h-52 overflow-y-auto border border-[#E5E7EB] rounded-lg">
               {quotas.map((q, i) => (
-                <div key={i} className="flex items-center gap-3 p-2 border-b border-[#E5E7EB] last:border-b-0">
+                <div key={i} className="flex items-center gap-2 px-3 py-1.5 border-b border-[#E5E7EB] last:border-b-0">
                   <span className="flex-1 text-sm text-[#374151] truncate" title={q.text}>{q.text}</span>
                   <input
                     type="number"
-                    value={q.objectif}
-                    onChange={e => updateQuotaObjectif(i, e.target.value)}
-                    placeholder="0"
-                    className="w-20 bg-white border border-[#D1D5DB] rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-[#059669]"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={q.pourcentage}
+                    onChange={e => updateQuotaPourcentage(i, e.target.value)}
+                    className="w-16 bg-white border border-[#D1D5DB] rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-[#059669]"
                   />
+                  <span className="text-xs text-[#6B7280] w-4">%</span>
+                  {modeManuel && (
+                    <button type="button" onClick={() => supprimerModalite(i)} className="text-[#DC2626] hover:text-red-800 text-xs">✕</button>
+                  )}
                 </div>
               ))}
             </div>
-            <p className="mt-1 text-xs text-[#9CA3AF]">
-              Total: {quotas.reduce((s, q) => s + q.objectif, 0)} | Laissez 0 pour ignorer une modalite
-            </p>
-          </div>
-        )}
+          )}
+
+          {/* Indicateur total */}
+          {quotas.length > 0 && (
+            <div className={`mt-1.5 flex items-center justify-between text-xs px-2 py-1 rounded ${
+              totalValide ? 'bg-green-50 text-green-700' : totalPct > 100 ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'
+            }`}>
+              <span>Total: <strong>{totalPct.toFixed(1)}%</strong></span>
+              <span>{totalValide ? 'Parfait' : totalPct > 100 ? 'Depasse 100%' : `Manque ${(100 - totalPct).toFixed(1)}%`}</span>
+            </div>
+          )}
+        </div>
       </div>
+
       <div className="flex gap-3 mt-6 pt-4 border-t border-[#E5E7EB]">
         <Button variant="secondary" onClick={onClose} fullWidth>Annuler</Button>
         <Button variant="primary" onClick={handleSubmit} loading={saving} fullWidth>Creer</Button>
@@ -1597,23 +1964,24 @@ function AddQuotasModal({ segmentation, onClose, onSave }) {
   const [saving, setSaving] = useState(false)
 
   async function handleSubmit() {
-    // Parser le texte: une ligne par quota, format "valeur: objectif" ou "valeur = objectif"
+    // Parser le texte: une ligne par quota, format "valeur: pourcentage" ou "valeur = pourcentage"
     const lines = quotasText.split('\n').filter(l => l.trim())
     const quotas = lines.map(line => {
-      const match = line.match(/^(.+?)[\s]*[:=][\s]*(\d+)$/)
+      const match = line.match(/^(.+?)[\s]*[:=][\s]*(\d+(?:\.\d+)?)%?$/)
       if (match) {
-        return { segment_value: match[1].trim(), objectif: parseInt(match[2]) }
+        return { segment_value: match[1].trim(), pourcentage: parseFloat(match[2]) }
       }
       return null
     }).filter(Boolean)
 
     if (quotas.length === 0) {
-      return alert('Format invalide. Utilisez: "Valeur: 50" ou "Valeur = 50"')
+      return alert('Format invalide. Utilisez: "Valeur: 30" ou "Valeur = 30" (pourcentage)')
     }
 
     setSaving(true)
     try {
       await createQuotasBulk({
+        enquete_id: segmentation.enquete_id,
         segmentation_id: segmentation.id,
         quotas: quotas
       })
@@ -1628,16 +1996,16 @@ function AddQuotasModal({ segmentation, onClose, onSave }) {
       <div className="space-y-4">
         <div>
           <label className="block text-xs font-medium text-[#374151] mb-1.5">
-            Quotas (une ligne par valeur)
+            Quotas en pourcentage (une ligne par valeur)
           </label>
           <textarea
             value={quotasText}
             onChange={e => setQuotasText(e.target.value)}
             rows={8}
-            placeholder={`Cote d'Ivoire: 50\nSenegal: 50\nCameroun: 50\nBurkina Faso: 30`}
+            placeholder={`Cote d'Ivoire: 30\nSenegal: 25\nCameroun: 25\nBurkina Faso: 20`}
             className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#059669] resize-none"
           />
-          <p className="mt-1 text-xs text-[#9CA3AF]">Format: "Valeur: objectif" ou "Valeur = objectif"</p>
+          <p className="mt-1 text-xs text-[#9CA3AF]">Format: "Valeur: 30" (pourcentage). Total recommande: 100%</p>
         </div>
       </div>
       <div className="flex gap-3 mt-6 pt-4 border-t border-[#E5E7EB]">
@@ -1653,6 +2021,23 @@ function AddQuotasModal({ segmentation, onClose, onSave }) {
    ══════════════════════════════════════════════════════════════════════════════ */
 
 function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, onAdd, onEdit, onDelete, isSuperAdmin, onRefresh }) {
+  const [migrating, setMigrating] = useState(false)
+  const enqSort = useSortable('nom', 'asc')
+
+  async function handleMigrate() {
+    if (!confirm('Migrer tous les identifiants vers le format usr00001/adm00001 ?\n\nATTENTION : les enqueteurs devront utiliser leur nouvel identifiant pour se connecter.')) return
+    setMigrating(true)
+    try {
+      const result = await migrateIdentifiants()
+      alert(`Migration terminée : ${result.migres} identifiants mis à jour.`)
+      onRefresh()
+    } catch {
+      alert('Erreur lors de la migration.')
+    } finally {
+      setMigrating(false)
+    }
+  }
+
   return (
     <div className="p-6 animate-fadeIn max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
@@ -1660,10 +2045,15 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
           <h1 className="text-2xl font-bold text-[#111827]">Enqueteurs</h1>
           <p className="text-sm text-[#6B7280]">{total} enqueteurs enregistres</p>
         </div>
-        <Button variant="primary" onClick={onAdd}>
-          <PlusIcon />
-          <span className="ml-2">Nouvel enqueteur</span>
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={handleMigrate} loading={migrating}>
+            Reformater les IDs
+          </Button>
+          <Button variant="primary" onClick={onAdd}>
+            <PlusIcon />
+            <span className="ml-2">Nouvel enqueteur</span>
+          </Button>
+        </div>
       </div>
 
       <div className="mb-6 max-w-xs">
@@ -1684,17 +2074,24 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
         <table className="w-full">
           <thead>
             <tr className="bg-[#F9FAFB] border-b border-[#E5E7EB]">
-              <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Enqueteur</th>
-              <th className="text-left px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Contact</th>
-              <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Enquetes</th>
-              <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Valides</th>
-              <th className="px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Progression</th>
-              <th className="text-center px-4 py-3 text-[10px] font-semibold text-[#6B7280] uppercase">Connexion</th>
+              <SortableHeader label="Enqueteur" k="nom" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
+              <SortableHeader label="Contact" k="email" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
+              <SortableHeader label="Enquetes" k="nb_enquetes" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
+              <SortableHeader label="Valides" k="valides" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
+              <SortableHeader label="Progression" k="pct" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
+              <SortableHeader label="Connexion" k="connexion" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody>
-            {enqueteurs.map(e => {
+            {enqSort.sorted(enqueteurs, {
+              nom: e => `${e.nom} ${e.prenom}`,
+              email: e => e.email || '',
+              nb_enquetes: e => e.nb_enquetes || 0,
+              valides: e => e.total_completions_valides ?? e.total_completions ?? 0,
+              pct: e => e.total_objectif > 0 ? Math.round(((e.total_completions_valides ?? e.total_completions ?? 0) / e.total_objectif) * 100) : 0,
+              connexion: e => e.derniere_connexion ? new Date(e.derniere_connexion).getTime() : 0,
+            }).map(e => {
               const valides = e.total_completions_valides ?? e.total_completions ?? 0
               const pct = e.total_objectif > 0 ? Math.round((valides / e.total_objectif) * 100) : 0
               const lastConnexion = formatTimeAgo(e.derniere_connexion)
@@ -2129,7 +2526,7 @@ function EnqueteurModal({ enqueteur, onClose, onSave, isSuperAdmin, currentUserI
   }
 
   async function handleSubmit() {
-    if (!form.identifiant || !form.nom || !form.prenom) return alert('Remplissez tous les champs obligatoires')
+    if (!form.nom || !form.prenom) return alert('Remplissez tous les champs obligatoires')
     setSaving(true)
     try {
       await onSave(form)
@@ -2139,25 +2536,26 @@ function EnqueteurModal({ enqueteur, onClose, onSave, isSuperAdmin, currentUserI
   return (
     <Modal isOpen={true} onClose={onClose} title={enqueteur ? 'Modifier l\'enqueteur' : 'Nouvel enqueteur'}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        {enqueteur ? (
           <div>
-            <label className="block text-xs font-medium text-[#374151] mb-1.5">Identifiant *</label>
+            <label className="block text-xs font-medium text-[#374151] mb-1.5">Identifiant</label>
             <input
               value={form.identifiant}
-              onChange={e => setForm(f => ({ ...f, identifiant: e.target.value.toUpperCase() }))}
-              placeholder="ACQ1, GENZ2..."
-              className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#059669]"
+              readOnly
+              className="w-full bg-[#F3F4F6] border border-[#D1D5DB] rounded-lg px-3 py-2 text-sm text-[#6B7280] cursor-not-allowed"
             />
           </div>
+        ) : (
           <div>
-            <label className="block text-xs font-medium text-[#374151] mb-1.5">Mot de passe</label>
+            <label className="block text-xs font-medium text-[#374151] mb-1.5">Mot de passe initial</label>
             <input
               value={form.mot_de_passe}
               onChange={e => setForm(f => ({ ...f, mot_de_passe: e.target.value }))}
               className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#059669]"
             />
+            <p className="text-xs text-[#9CA3AF] mt-1">L'identifiant sera généré automatiquement</p>
           </div>
-        </div>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-[#374151] mb-1.5">Prenom *</label>
@@ -2371,12 +2769,12 @@ function EditAffectationModal({ affectation, onClose, onSave }) {
       <p className="text-xs font-mono text-[#6B7280] mb-4 px-2 py-1 bg-[#F3F4F6] rounded inline-block">{enqr.identifiant}</p>
 
       {/* Affichage du lien */}
-      {affectation.lien_questionnaire && (
+      {(affectation.lien_direct || affectation.lien_questionnaire) && (
         <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
           <p className="text-xs font-medium text-emerald-700 mb-1">Lien questionnaire</p>
-          <a href={affectation.lien_questionnaire} target="_blank" rel="noopener noreferrer"
+          <a href={affectation.lien_direct || affectation.lien_questionnaire} target="_blank" rel="noopener noreferrer"
              className="text-xs text-emerald-600 hover:underline break-all">
-            {affectation.lien_questionnaire}
+            {affectation.lien_direct || affectation.lien_questionnaire}
           </a>
         </div>
       )}
@@ -2636,7 +3034,7 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
   const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
   const totalInvalides = affectations.reduce((s, a) => s + ((a.completions_total || 0) - (a.completions_valides ?? a.completions_total ?? 0)), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
-  const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
+  const conversionRate = totalClics > 0 ? Math.min(100, Math.round((totalCompletions / totalClics) * 100)) : 0
 
   if (affectations.length === 0) {
     return (
@@ -2695,7 +3093,7 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
             const completions = aff.completions_valides ?? aff.completions_total ?? 0
             const invalides = (aff.completions_total || 0) - completions
             const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
-            const convRate = aff.clics > 0 ? Math.round((completions / aff.clics) * 100) : 0
+            const convRate = aff.clics > 0 ? Math.min(100, Math.round((completions / aff.clics) * 100)) : 0
 
             return (
               <Card
@@ -2813,14 +3211,15 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
                       <div key={s.id} className="ml-4">
                         <p className="text-xs font-medium text-[#9CA3AF] mb-1">{s.nom}</p>
                         {s.quotas.map((q, i) => {
-                          const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
+                          const pct = q.objectif > 0 ? Math.round(((q.valides || 0) / q.objectif) * 100) : 0
                           return (
                             <div key={i} className="flex items-center gap-3 mb-1">
                               <span className="w-24 text-xs text-[#4B5563] truncate">{q.segment_value}</span>
                               <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
                                 <div className="h-full rounded-full bg-[#059669]" style={{ width: `${Math.min(pct, 100)}%` }} />
                               </div>
-                              <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">{q.completions || 0}/{q.objectif}</span>
+                              <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">{q.valides || 0}/{q.objectif || 0}</span>
+                              <span className="text-xs font-semibold w-8 text-right" style={{ color: pct >= 100 ? '#059669' : pct >= 50 ? '#D97706' : '#DC2626' }}>{pct}%</span>
                             </div>
                           )
                         })}
@@ -2932,14 +3331,14 @@ function MyEnqueteDetailView({ affectation, onBack }) {
           </h3>
           <div className="flex items-center gap-2 p-3 bg-[#F9FAFB] border border-[#E5E7EB] rounded-lg mb-4">
             <p className="flex-1 text-xs font-mono text-[#4B5563] truncate">
-              {affectation.lien_questionnaire}
+              {affectation.lien_direct || affectation.lien_questionnaire}
             </p>
-            <CopyButton text={affectation.lien_questionnaire} />
+            <CopyButton text={affectation.lien_direct || affectation.lien_questionnaire} />
           </div>
           <Button
             variant="secondary"
             fullWidth
-            onClick={() => window.open(affectation.lien_questionnaire, '_blank')}
+            onClick={() => window.open(affectation.lien_direct || affectation.lien_questionnaire, '_blank')}
           >
             Ouvrir le questionnaire
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

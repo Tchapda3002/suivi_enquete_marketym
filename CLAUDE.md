@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Marketym - Plateforme de Suivi d'Enquetes
 
 ## Description
@@ -11,6 +15,48 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 - **Sondages**: QuestionPro API
 - **Deploiement**: Railway (backend), Render (frontend)
 
+## Commandes de Developpement
+
+### Backend
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate  # Premiere fois seulement
+pip install -r requirements.txt                     # Premiere fois seulement
+uvicorn app.main:app --reload --port 8000           # Lancer le serveur dev
+```
+
+### Frontend
+```bash
+cd frontend
+npm install          # Premiere fois seulement
+npm run dev          # Lancer le serveur dev (port 3000)
+npm run build        # Build production → dist/
+```
+
+### Variables d'environnement
+- Backend: copier `backend/.env.example` → `backend/.env`
+- Frontend: copier `frontend/.env.example` → `frontend/.env`
+
+## Architecture
+
+### Backend (`/backend/app/`)
+- **`main.py`** (2163 lignes) - Fichier monolithique contenant TOUS les endpoints (admin, enqueteur, tracking, segmentations, quotas, sync QuestionPro). Pas de routeurs separees sauf pour l'auth.
+- **`auth/router.py`** (1067 lignes) - Endpoints d'authentification + dependance `require_admin`
+- **`auth/security.py`** - JWT, hash bcrypt, generation OTP
+- **`auth/email.py`** - Envoi emails via Brevo SDK
+- **`config.py`** - Settings depuis variables d'environnement (Supabase, QuestionPro, Brevo, JWT)
+
+### Frontend (`/frontend/src/`)
+- **`lib/api.js`** - Instance Axios avec intercepteur JWT automatique + toutes les fonctions API
+- **`components/ui.jsx`** - Composants UI reutilisables (boutons, modals, tables, formulaires)
+- **Pages**: Login, Register, ActivateAccount (OTP premiere connexion), Dashboard (enqueteur), Admin
+
+### Flux d'authentification
+1. Inscription → `POST /auth/register`
+2. Premiere connexion → `POST /auth/login` retourne `otp_required` → redirect vers `/activate`
+3. Verif OTP → `POST /auth/verify-otp` → `compte_configure = true`
+4. Connexions suivantes → `POST /auth/login` retourne `authenticated` directement
+
 ## Services & Configurations
 - **Email**: Brevo - expediteur `marketym@hcexecutive.net`
 - **Auth**: JWT + OTP (code 6 chiffres, expire 5 min)
@@ -20,11 +66,6 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 
 ### Comptes de test
 - **Admin**: wilfredkouadjo006@gmail.com
-
-### Survey IDs QuestionPro
-(A remplir quand des surveys sont utilises)
-- Survey 1: `_________` - Description
-- Survey 2: `_________` - Description
 
 ## Schema Base de Donnees
 
@@ -80,21 +121,33 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 | POST | /enqueteurs | Creer enqueteur |
 | GET | /enquetes | Liste enquetes |
 | POST | /enquetes | Creer enquete (survey_id, cible, description) |
-| GET | /stats-pays | Stats par pays |
-| GET | /affectations/by-enquete/{id} | Affectations d'une enquete |
+| GET | /affectations | Liste toutes les affectations |
+| POST | /affectations | Creer une affectation |
+| GET | /affectations/by-enquete/{id} | Affectations d'une enquete (avec completions_valides) |
 | GET | /affectations/{id}/clics | Voir les clics d'une affectation |
 | POST | /affectations/migrate-links | Migrer les anciens liens vers le tracking |
+| GET | /segmentations/by-enquete/{id} | Segmentations d'une enquete |
+| POST | /segmentations | Creer une segmentation |
+| GET | /quotas/by-enquete/{id} | Quotas d'une enquete |
+| POST | /quotas | Creer un quota |
+| POST | /quotas/bulk | Creer des quotas en masse |
 | POST | /sync | Synchroniser toutes les affectations |
-
-### Tracking (Public)
-| Methode | Endpoint | Description |
-|---------|----------|-------------|
-| GET | /r/{affectation_id} | Track clic et redirige vers QuestionPro |
+| GET | /stats-pays | Stats par pays |
+| GET | /stats-segments | Stats par segment |
 
 ### Enqueteur (`/enqueteur`)
 | Methode | Endpoint | Description |
 |---------|----------|-------------|
+| POST | /login | Login avec identifiant + mot de passe |
 | GET | /{id} | Profil et stats enqueteur |
+| GET | /{id}/affectation/{affectation_id}/pays | Completions par pays |
+| GET | /{id}/segmentations | Segmentations de l'enqueteur |
+| POST | /{id}/sync | Synchroniser avec QuestionPro |
+
+### Tracking (Public)
+| Methode | Endpoint | Description |
+|---------|----------|-------------|
+| GET | /r/{affectation_id} | Track clic (IP unique) et redirige vers QuestionPro |
 
 ## Pages Frontend
 
@@ -102,38 +155,21 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 |-------|-----------|-------------|
 | /login | Login.jsx | Connexion + lien inscription + mot de passe oublie |
 | /register | Register.jsx | Formulaire inscription |
-| /admin | Admin.jsx | Dashboard admin complet |
+| /activate | ActivateAccount.jsx | Verification OTP premiere connexion |
+| /admin | Admin.jsx | Dashboard admin complet (onglets: enquetes, enqueteurs, affectations, quotas, stats, mes enquetes) |
 | /dashboard | Dashboard.jsx | Dashboard enqueteur |
 
-## Ce qui a ete fait
-
-### Authentification (Complete)
-1. **Inscription** - L'utilisateur cree son compte avec email/mot de passe
-2. **Premiere connexion** - Apres login, envoi OTP par email pour valider le compte
-3. **Connexions suivantes** - Login direct sans OTP (compte_configure = true)
-4. **Mot de passe oublie** - Envoi OTP, puis reset du mot de passe
-5. **Emails** - Migration de Resend vers Brevo (domaine verifie)
-
-### Securite Admin (Complete)
-1. **Dependance `require_admin`** - Verifie JWT + is_admin
-2. **Tous les endpoints `/admin/*` securises** - 401 si pas de token, 403 si pas admin
-3. **Intercepteur axios** - Ajoute automatiquement le token JWT aux requetes
-
-### Gestion Enquetes (En cours)
-1. **Creation simplifiee** - Seulement survey_id, cible, description
-2. **Recuperation auto** - Nom et infos depuis QuestionPro
-3. **Modal avec verification** - Bouton "Verifier" avant de creer
-
-### Admin
-1. Dashboard avec stats globales
-2. Liste des enqueteurs (CRUD)
-3. Liste des enquetes (CRUD)
-4. Stats par pays
-5. Affectations par enquete
-6. **Onglet "Mes enquetes"** - Permet aux admins de voir leurs propres affectations en tant qu'enqueteur
-
-### Enqueteur
-1. Dashboard enqueteur avec ses stats
+## Migrations SQL
+Appliquer dans Supabase dans l'ordre :
+1. `supabase/schema.sql` - Schema initial
+2. `supabase/migration_v2.sql` - Tables de base
+3. `supabase/migration_v5_auth.sql` - Tables auth
+4. `supabase/migration_v6_password.sql` - Reset mot de passe
+5. `supabase/migration_v7_invitation.sql` - Tokens d'invitation
+6. `backend/migrations/002_segmentations_et_lien_legacy.sql`
+7. `backend/migrations/003_historique_completions.sql`
+8. `backend/migrations/004_add_role_column.sql`
+9. `backend/migrations/005_table_clics.sql` - Tracking clics avec dedup IP
 
 ## A faire
 
@@ -152,6 +188,7 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 4. **Self-registration** - Les utilisateurs peuvent s'inscrire eux-memes
 5. **Creation enquete simplifiee** - Survey ID recupere automatiquement nom/infos de QuestionPro
 6. **Securite admin** - JWT obligatoire + verification is_admin pour tous les endpoints /admin/*
+7. **main.py monolithique** - Tous les endpoints non-auth dans un seul fichier (simplite vs structure)
 
 ## Problemes Resolus
 
@@ -161,54 +198,29 @@ Application web pour H&C Executive permettant de suivre les enqueteurs et leurs 
 | Emails non recus malgre 200 OK | Ajout logging, redemarrage serveur |
 | Comptes dupliques avec meme email | Suppression du compte non-admin |
 | Endpoints admin accessibles sans auth | Ajout require_admin sur tous les endpoints |
-
-## Fichiers Importants
-
-```
-backend/
-  app/
-    main.py              # Point d'entree FastAPI + tous les endpoints
-    config.py            # Configuration (env vars)
-    auth/
-      router.py          # Endpoints authentification + require_admin
-      security.py        # Hash, JWT, OTP
-      email.py           # Envoi emails Brevo
-  .env                   # Variables d'environnement
-
-frontend/
-  src/
-    pages/
-      Login.jsx          # Page connexion
-      Register.jsx       # Page inscription
-      Admin.jsx          # Dashboard admin complet
-      Dashboard.jsx      # Dashboard enqueteur
-    lib/
-      api.js             # Appels API + intercepteur JWT
-```
+| Clics surestimes (993 vs 227 reel) | Deduplication par IP unique par affectation |
 
 ## Derniere Session
-**Date**: 9 mars 2025
+**Date**: 10 mars 2026
 **Resume**:
 - Implementation du tracking des clics avec deduplication par IP
   - Nouvelle table `clics` (affectation_id, ip_address, user_agent, created_at)
   - Endpoint de redirection `/r/{affectation_id}` qui track le clic puis redirige vers QuestionPro
   - Deduplication automatique: un seul clic compte par IP unique par affectation
-  - Nouvelle colonne `lien_direct` dans affectations (lien QuestionPro)
-  - `lien_questionnaire` contient maintenant le lien de tracking
-  - Clics = IPs uniques des reponses QuestionPro (avant: 993, apres: 227)
+  - Nouvelle colonne `lien_direct` dans affectations (lien QuestionPro direct)
+  - `lien_questionnaire` contient maintenant le lien de tracking `/r/{id}`
 - Nouveaux endpoints admin:
   - `GET /admin/affectations/{id}/clics` - voir les clics d'une affectation
   - `POST /admin/affectations/migrate-links` - migrer les anciennes affectations
 - Migration: `backend/migrations/005_table_clics.sql`
-- Correction expediteur email: `marketym@hcexecutive.net` (l'ancien `notification.afrikalytics.co` etait bloque)
+- Correction expediteur email: `marketym@hcexecutive.net`
+- Agregation quotas et onglet "Mes enquetes" dans le dashboard admin
 
-**Configuration requise sur Railway**:
-- `BACKEND_URL` = URL du backend (ex: `https://api.marketym.com`)
+**Configuration Railway requise**:
+- `BACKEND_URL` = URL du backend
 - `EMAIL_FROM` = `marketym@hcexecutive.net`
-- Executer la migration SQL dans Supabase
-- Appeler `/admin/affectations/migrate-links` pour mettre a jour les anciennes affectations
 
 **Prochain step**:
-- Executer la migration en production
-- Configurer BACKEND_URL sur Railway
-- Tester le tracking des clics
+- Executer la migration 005 en production si pas encore fait
+- Appeler `/admin/affectations/migrate-links` pour mettre a jour les anciennes affectations
+- Implementer les quotas et l'export CSV

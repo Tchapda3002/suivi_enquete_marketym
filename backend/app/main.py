@@ -60,7 +60,7 @@ class UpdateAffectation(BaseModel):
     commentaire_admin: Optional[str] = None
 
 class CreateEnqueteur(BaseModel):
-    identifiant: str
+    identifiant: Optional[str] = None
     nom: str
     prenom: str
     email: Optional[str] = None
@@ -121,19 +121,20 @@ class UpdateSegmentation(BaseModel):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class CreateQuota(BaseModel):
+    enquete_id: str
     segmentation_id: str
-    affectation_id: Optional[str] = None  # Si None = quota global pour l'enquete
+    affectation_id: Optional[str] = None  # Si None = s'applique a tous les enqueteurs
     segment_value: str                     # Ex: "Cote d'Ivoire", "Tech"
-    objectif: int
+    pourcentage: float                     # Ex: 30.0 (%)
 
 class UpdateQuota(BaseModel):
-    objectif: Optional[int] = None
-    completions: Optional[int] = None
+    pourcentage: Optional[float] = None
 
 class BulkQuotas(BaseModel):
+    enquete_id: str
     segmentation_id: str
     affectation_id: Optional[str] = None
-    quotas: List[Dict[str, Any]]  # [{segment_value: str, objectif: int}]
+    quotas: List[Dict[str, Any]]  # [{segment_value: str, pourcentage: float}]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NORMALISATION DES PAYS
@@ -518,25 +519,25 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
         aff["completions_segments"] = segments_map.get(aff_id, [])
 
         # Calculer les completions valides pour cet enqueteur
-        # Les completions valides = min(completions_enqueteur, part proportionnelle du quota)
+        # Les completions valides = min(completions_enqueteur, objectif_segment calcule depuis pourcentage)
         enqueteur_segments = segments_map.get(aff_id, [])
-        enquete_quotas = quotas_glob_map.get(enquete_id, [])
+        # Utiliser d'abord les quotas individuels, sinon les quotas globaux de l'enquete
+        active_quotas = quotas_indiv_map.get(aff_id) or quotas_glob_map.get(enquete_id, [])
+        objectif_total = aff.get("objectif_total", 0) or 0
 
-        # Creer un mapping segment_value normalise -> quota info
+        # Creer un mapping segment_value normalise -> objectif calcule depuis pourcentage
         quota_info = {}
-        for q in enquete_quotas:
+        for q in active_quotas:
             seg_val = q.get("segment_value", "")
             if seg_val:
-                # Normaliser le nom du segment pour la comparaison
                 seg_val_norm = normalize_country_name(seg_val)
-                quota_info[seg_val_norm] = {
-                    "objectif": q.get("objectif", 0) or 0,
-                    "completions_globales": q.get("completions", 0) or 0
-                }
+                pourcentage = q.get("pourcentage", 0) or 0
+                # Objectif individuel = floor(objectif_total * pourcentage / 100)
+                objectif_individuel = int(objectif_total * pourcentage / 100)
+                quota_info[seg_val_norm] = objectif_individuel
 
-        # Calculer completions valides par segment (quotas INDIVIDUELS)
-        # Chaque enqueteur a les memes quotas par segment
-        # Valides = min(completions_enqueteur, quota_individuel)
+        # Calculer completions valides par segment
+        # Valides = min(completions_enqueteur_segment, objectif_segment)
         completions_valides = 0
         completions_total = aff.get("completions_total", 0) or 0
 
@@ -549,33 +550,36 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
             seg_val_norm = PAYS_MAPPING.get(seg_val_norm, seg_val_norm)
             segments_agreg[seg_val_norm] = segments_agreg.get(seg_val_norm, 0) + seg_comp
 
-        # Calculer le ratio si les segments depassent completions_total (doublons dans DB)
-        sum_segments = sum(segments_agreg.values())
-        ratio = completions_total / sum_segments if sum_segments > completions_total else 1.0
+        if quota_info:
+            # Calculer le ratio si les segments depassent completions_total (doublons dans DB)
+            sum_segments = sum(segments_agreg.values())
+            ratio = completions_total / sum_segments if sum_segments > completions_total else 1.0
 
-        for seg_val_norm, seg_comp in segments_agreg.items():
-            # Ajuster seg_comp si ratio < 1 (correction doublons)
-            seg_comp_adjusted = int(seg_comp * ratio) if ratio < 1 else seg_comp
-            if seg_val_norm in quota_info:
-                objectif = quota_info[seg_val_norm]["objectif"]
-                # Quota individuel: valides = min(completions, objectif)
-                completions_valides += min(seg_comp_adjusted, objectif)
-            # Segment non trouve = invalide (non classifie), on n'ajoute rien
+            for seg_val_norm, seg_comp in segments_agreg.items():
+                seg_comp_adjusted = int(seg_comp * ratio) if ratio < 1 else seg_comp
+                if seg_val_norm in quota_info:
+                    objectif = quota_info[seg_val_norm]
+                    completions_valides += min(seg_comp_adjusted, objectif)
+                # Segment non trouve = invalide, on n'ajoute rien
+        else:
+            # Pas de quotas definis = toutes les completions sont valides
+            completions_valides = completions_total
 
         # S'assurer que valides <= completions_total
         aff["completions_valides"] = min(completions_valides, completions_total)
 
-        # Utiliser le lien de tracking existant, ou le generer si absent
-        if not aff.get("lien_questionnaire"):
-            # Generer le lien de tracking pour les anciennes affectations
-            aff["lien_questionnaire"] = f"{settings.BACKEND_URL}/r/{aff['id']}"
+        # S'assurer que lien_direct et lien_questionnaire sont corrects
+        if not aff.get("lien_direct"):
+            enquete_data = aff.get("enquetes", {})
+            enquete_survey_id = enquete_data.get("survey_id") if enquete_data else None
+            aff_survey_id = aff.get("survey_id")
+            is_individual = aff_survey_id and enquete_survey_id and aff_survey_id != enquete_survey_id
+            if not is_individual and enquete_survey_id and enq.get("token"):
+                aff["lien_direct"] = f"https://hcakpo.questionpro.com/t/{enquete_survey_id}?custom1={enq['token']}"
 
-            # S'assurer que lien_direct existe pour la redirection
-            if not aff.get("lien_direct"):
-                enquete = aff.get("enquetes", {})
-                survey_id = enquete.get("survey_id") if enquete else None
-                if survey_id and enq.get("token"):
-                    aff["lien_direct"] = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enq['token']}"
+        # lien_questionnaire : pour survey individuel = lien_direct, pour partage = lien_direct aussi (pas de tracking URL sans base_url)
+        if not aff.get("lien_questionnaire"):
+            aff["lien_questionnaire"] = aff.get("lien_direct", "")
 
     return {**enq, "affectations": affectations.data}
 
@@ -633,19 +637,15 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
 
     # Objectif global = somme des tailles d'echantillon de toutes les enquetes
     total_objectif = sum(e.get("taille_echantillon", 0) for e in enquetes.data)
-    total_completions = sum(a["completions_total"] for a in affectations.data)
-    total_clics = sum(a["clics"] for a in affectations.data)
+    total_completions = sum(a.get("completions_total", 0) or 0 for a in affectations.data)
+    total_clics = sum(a.get("clics", 0) or 0 for a in affectations.data)
 
-    # Calculer valides avec QUOTAS INDIVIDUELS
-    # Chaque enqueteur a les memes quotas par segment
-    # Total valides = somme des min(completions_enqueteur, quota) pour chaque enqueteur
-
-    # Charger les quotas par enquete
-    all_quotas = sb.table("quotas").select("segmentation_id, segment_value, objectif").is_("affectation_id", "null").execute()
+    # Charger les quotas par enquete (avec pourcentage)
+    all_quotas = sb.table("quotas").select("segmentation_id, segment_value, pourcentage").is_("affectation_id", "null").execute()
     all_segmentations = sb.table("segmentations").select("id, enquete_id").execute()
     seg_to_enquete = {s["id"]: s["enquete_id"] for s in all_segmentations.data}
 
-    # Construire quotas par enquete (normalises)
+    # Construire quotas par enquete: {enquete_id: {seg_norm: pourcentage}}
     enquete_quotas = {}
     for q in all_quotas.data:
         enquete_id = seg_to_enquete.get(q.get("segmentation_id"))
@@ -654,7 +654,7 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
                 enquete_quotas[enquete_id] = {}
             seg_norm = normalize_country_name(q.get("segment_value", ""))
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            enquete_quotas[enquete_id][seg_norm] = q.get("objectif", 0) or 0
+            enquete_quotas[enquete_id][seg_norm] = q.get("pourcentage", 0) or 0
 
     # Charger completions_segments pour toutes les affectations
     aff_ids = [a["id"] for a in affectations.data]
@@ -672,7 +672,9 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
     total_valides = 0
     for aff in affectations.data:
         enquete_id = aff.get("enquete_id")
-        quotas = enquete_quotas.get(enquete_id, {})
+        quotas_pct = enquete_quotas.get(enquete_id, {})
+        objectif_total = aff.get("objectif_total", 0) or 0
+        completions_total_aff = aff.get("completions_total", 0) or 0
         segments = aff_segments.get(aff["id"], [])
 
         # Agreger par segment normalise
@@ -684,9 +686,15 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
             segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
 
-        for seg_norm, seg_comp in segments_agreg.items():
-            if seg_norm in quotas:
-                total_valides += min(seg_comp, quotas[seg_norm])
+        if quotas_pct:
+            aff_valides = 0
+            for seg_norm, seg_comp in segments_agreg.items():
+                if seg_norm in quotas_pct:
+                    objectif_seg = int(objectif_total * quotas_pct[seg_norm] / 100)
+                    aff_valides += min(seg_comp, objectif_seg)
+            total_valides += min(aff_valides, completions_total_aff)
+        else:
+            total_valides += completions_total_aff
 
     # Invalides = tout ce qui n'est pas valide
     total_invalides = total_completions - total_valides
@@ -726,11 +734,11 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
     enquetes = sb.table("enquetes").select("*").order("code").execute()
 
     # Charger tous les quotas et segmentations
-    all_quotas = sb.table("quotas").select("segmentation_id, segment_value, objectif").is_("affectation_id", "null").execute()
+    all_quotas = sb.table("quotas").select("segmentation_id, segment_value, pourcentage").is_("affectation_id", "null").execute()
     all_segmentations = sb.table("segmentations").select("id, enquete_id").execute()
     seg_to_enquete = {s["id"]: s["enquete_id"] for s in all_segmentations.data}
 
-    # Construire quotas par enquete (normalises)
+    # Construire quotas par enquete: {enquete_id: {seg_norm: pourcentage}}
     enquete_quotas = {}
     for q in all_quotas.data:
         enquete_id = seg_to_enquete.get(q.get("segmentation_id"))
@@ -739,7 +747,7 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
                 enquete_quotas[enquete_id] = {}
             seg_norm = normalize_country_name(q.get("segment_value", ""))
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            enquete_quotas[enquete_id][seg_norm] = q.get("objectif", 0) or 0
+            enquete_quotas[enquete_id][seg_norm] = q.get("pourcentage", 0) or 0
 
     # Charger toutes les affectations
     all_affectations = sb.table("affectations").select("id, enquete_id, objectif_total, completions_total, clics").execute()
@@ -787,9 +795,16 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
                 seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
                 segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
 
-            for seg_norm, seg_comp in segments_agreg.items():
-                if seg_norm in quotas:
-                    total_valides += min(seg_comp, quotas[seg_norm])
+            objectif_total_aff = aff.get("objectif_total") or 0
+            if quotas:
+                aff_valides = 0
+                for seg_norm, seg_comp in segments_agreg.items():
+                    if seg_norm in quotas:
+                        objectif_seg = int(objectif_total_aff * quotas[seg_norm] / 100)
+                        aff_valides += min(seg_comp, objectif_seg)
+                total_valides += min(aff_valides, aff.get("completions_total") or 0)
+            else:
+                total_valides += aff.get("completions_total") or 0
 
         result.append({
             **enq,
@@ -823,17 +838,14 @@ def get_enquete(id: str, admin: dict = Depends(require_admin), sb: Client = Depe
     quota_info = {}
     if seg_ids:
         quotas_raw = sb.table("quotas")\
-            .select("segment_value, objectif, completions")\
+            .select("segment_value, pourcentage")\
             .in_("segmentation_id", seg_ids)\
             .is_("affectation_id", "null")\
             .execute()
         for q in quotas_raw.data:
             seg_norm = normalize_country_name(q.get("segment_value", ""))
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            quota_info[seg_norm] = {
-                "objectif": q.get("objectif", 0) or 0,
-                "completions_globales": q.get("completions", 0) or 0
-            }
+            quota_info[seg_norm] = q.get("pourcentage", 0) or 0
 
     # Recuperer les completions_segments pour toutes les affectations
     aff_ids = [a["id"] for a in affectations.data]
@@ -863,11 +875,15 @@ def get_enquete(id: str, admin: dict = Depends(require_admin), sb: Client = Depe
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
             segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
 
-        for seg_norm, seg_comp in segments_agreg.items():
-            if seg_norm in quota_info:
-                objectif = quota_info[seg_norm]["objectif"]
-                # Quota individuel: valides = min(completions, objectif)
-                completions_valides += min(seg_comp, objectif)
+        objectif_total_aff = aff.get("objectif_total") or 0
+        if quota_info:
+            for seg_norm, seg_comp in segments_agreg.items():
+                if seg_norm in quota_info:
+                    objectif_seg = int(objectif_total_aff * quota_info[seg_norm] / 100)
+                    completions_valides += min(seg_comp, objectif_seg)
+            completions_valides = min(completions_valides, aff.get("completions_total") or 0)
+        else:
+            completions_valides = aff.get("completions_total") or 0
 
         aff["completions_valides"] = completions_valides
 
@@ -966,7 +982,8 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
 
     # Requete 3: Charger tous les quotas (pour calcul des valides)
     all_quotas = sb.table("quotas")\
-        .select("segmentation_id, segment_value, objectif, completions")\
+        .select("segmentation_id, segment_value, pourcentage")\
+        .is_("affectation_id", "null")\
         .execute()
 
     # Requete 4: Charger toutes les segmentations (pour mapper aux enquetes)
@@ -991,10 +1008,7 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
                 enquete_quotas[enquete_id] = {}
             seg_norm = normalize_country_name(q.get("segment_value", ""))
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            enquete_quotas[enquete_id][seg_norm] = {
-                "objectif": q.get("objectif", 0) or 0,
-                "completions_globales": q.get("completions", 0) or 0
-            }
+            enquete_quotas[enquete_id][seg_norm] = q.get("pourcentage", 0) or 0
 
     # Creer mapping affectation_id -> completions_segments
     aff_segments = {}
@@ -1037,11 +1051,16 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
                 seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
                 segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
 
-            for seg_norm, seg_comp in segments_agreg.items():
-                if seg_norm in quotas:
-                    obj = quotas[seg_norm]["objectif"]
-                    # Quota individuel: valides = min(completions, objectif)
-                    total_valides += min(seg_comp, obj)
+            objectif_total_aff = aff.get("objectif_total") or 0
+            if quotas:
+                aff_valides = 0
+                for seg_norm, seg_comp in segments_agreg.items():
+                    if seg_norm in quotas:
+                        objectif_seg = int(objectif_total_aff * quotas[seg_norm] / 100)
+                        aff_valides += min(seg_comp, objectif_seg)
+                total_valides += min(aff_valides, aff.get("completions_total") or 0)
+            else:
+                total_valides += aff.get("completions_total") or 0
 
         result.append({
             **enq,
@@ -1057,10 +1076,41 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
 
 @app.post("/admin/enqueteurs")
 def create_enqueteur(data: CreateEnqueteur, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    res = sb.table("enqueteurs").insert(data.dict()).execute()
+    # Auto-générer l'identifiant si non fourni
+    if not data.identifiant:
+        prefix = "adm" if data.is_admin else "usr"
+        existing = sb.table("enqueteurs").select("identifiant").ilike("identifiant", f"{prefix}%").execute()
+        next_num = len(existing.data) + 1
+        data.identifiant = f"{prefix}{next_num:05d}"
+
+    payload = {k: v for k, v in data.dict().items() if v is not None}
+    res = sb.table("enqueteurs").insert(payload).execute()
     if not res.data:
         raise HTTPException(status_code=400, detail="Erreur creation enqueteur")
     return res.data[0]
+
+
+@app.post("/admin/enqueteurs/migrate-identifiants")
+def migrate_identifiants(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Migrer tous les identifiants existants vers le format usr00001 / adm00001"""
+    all_users = sb.table("enqueteurs").select("id, is_admin, identifiant").order("created_at").execute()
+
+    adm_count = 0
+    usr_count = 0
+    updated = []
+
+    for user in all_users.data:
+        if user.get("is_admin"):
+            adm_count += 1
+            new_id = f"adm{adm_count:05d}"
+        else:
+            usr_count += 1
+            new_id = f"usr{usr_count:05d}"
+
+        sb.table("enqueteurs").update({"identifiant": new_id}).eq("id", user["id"]).execute()
+        updated.append({"id": user["id"], "ancien": user["identifiant"], "nouveau": new_id})
+
+    return {"ok": True, "migres": len(updated), "details": updated}
 
 @app.put("/admin/enqueteurs/{id}")
 def update_enqueteur(id: str, data: UpdateEnqueteur, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
@@ -1129,17 +1179,18 @@ def list_affectations_by_enquete(enquete_id: str, admin: dict = Depends(require_
     segmentations = sb.table("segmentations").select("id").eq("enquete_id", enquete_id).execute()
     seg_ids = [s["id"] for s in segmentations.data]
 
-    quota_info = {}
+    # Recuperer les quotas globaux avec pourcentage
+    quota_info = {}  # {seg_norm: pourcentage}
     if seg_ids:
         quotas_raw = sb.table("quotas")\
-            .select("segment_value, objectif")\
+            .select("segment_value, pourcentage")\
             .in_("segmentation_id", seg_ids)\
             .is_("affectation_id", "null")\
             .execute()
         for q in quotas_raw.data:
             seg_norm = normalize_country_name(q.get("segment_value", ""))
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            quota_info[seg_norm] = q.get("objectif", 0) or 0
+            quota_info[seg_norm] = q.get("pourcentage", 0) or 0
 
     # Recuperer completions_segments pour toutes les affectations
     aff_ids = [a["id"] for a in affectations.data]
@@ -1155,9 +1206,11 @@ def list_affectations_by_enquete(enquete_id: str, admin: dict = Depends(require_
                 all_segments[aid] = []
             all_segments[aid].append(s)
 
-    # Calculer completions_valides pour chaque affectation (quotas INDIVIDUELS)
+    # Calculer completions_valides pour chaque affectation
     for aff in affectations.data:
         aff_segments = all_segments.get(aff["id"], [])
+        objectif_total = aff.get("objectif_total", 0) or 0
+        completions_total = aff.get("completions_total", 0) or 0
         completions_valides = 0
 
         # Agreger les completions par segment normalise
@@ -1169,17 +1222,20 @@ def list_affectations_by_enquete(enquete_id: str, admin: dict = Depends(require_
             seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
             segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
 
-        for seg_norm, seg_comp in segments_agreg.items():
-            if seg_norm in quota_info:
-                # Quota individuel: valides = min(completions, objectif)
-                completions_valides += min(seg_comp, quota_info[seg_norm])
+        if quota_info:
+            for seg_norm, seg_comp in segments_agreg.items():
+                if seg_norm in quota_info:
+                    objectif_seg = int(objectif_total * quota_info[seg_norm] / 100)
+                    completions_valides += min(seg_comp, objectif_seg)
+        else:
+            completions_valides = completions_total
 
-        aff["completions_valides"] = completions_valides
+        aff["completions_valides"] = min(completions_valides, completions_total)
 
     return affectations.data
 
 @app.post("/admin/affectations")
-def create_affectation(data: CreateAffectation, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+def create_affectation(data: CreateAffectation, request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """Creer une nouvelle affectation"""
     # Verifier que l'enquete existe et recuperer son survey_id
     enquete = sb.table("enquetes").select("id, survey_id").eq("id", data.enquete_id).execute()
@@ -1195,21 +1251,11 @@ def create_affectation(data: CreateAffectation, admin: dict = Depends(require_ad
 
     enqueteur_token = enqueteur.data[0].get("token")
 
-    # Verifier qu'il n'y a pas deja une affectation pour cet enqueteur sur cette enquete
-    existing = sb.table("affectations")\
-        .select("id")\
-        .eq("enquete_id", data.enquete_id)\
-        .eq("enqueteur_id", data.enqueteur_id)\
-        .execute()
-    if existing.data:
-        raise HTTPException(status_code=400, detail="Cet enqueteur est deja affecte a cette enquete")
-
-    # Generer le lien direct QuestionPro (pour la redirection)
+    # Generer le lien direct QuestionPro avec custom1=token (survey partage)
     lien_direct = None
     if survey_id and enqueteur_token:
         lien_direct = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enqueteur_token}"
 
-    # Creer l'affectation (sans lien_questionnaire pour l'instant)
     affectation_data = {
         "enquete_id": data.enquete_id,
         "enqueteur_id": data.enqueteur_id,
@@ -1222,13 +1268,11 @@ def create_affectation(data: CreateAffectation, admin: dict = Depends(require_ad
     if not res.data:
         raise HTTPException(status_code=400, detail="Erreur creation affectation")
 
-    # Recuperer l'ID et generer le lien de tracking
     aff_id = res.data[0]["id"]
 
-    # Generer le lien de tracking (passe par notre backend pour compter les clics)
-    lien_questionnaire = f"{settings.BACKEND_URL}/r/{aff_id}"
+    # Lien de tracking construit depuis l'URL de la requete (pas besoin de BACKEND_URL)
+    lien_questionnaire = f"{str(request.base_url)}r/{aff_id}"
 
-    # Mettre a jour l'affectation avec le lien de tracking
     sb.table("affectations")\
         .update({"lien_questionnaire": lien_questionnaire})\
         .eq("id", aff_id)\
@@ -1300,24 +1344,41 @@ def get_affectation_clics(id: str, admin: dict = Depends(require_admin), sb: Cli
     }
 
 @app.post("/admin/affectations/migrate-links")
-def migrate_affectation_links(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+def migrate_affectation_links(request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """
-    Migrer les anciennes affectations vers le nouveau systeme de tracking.
-    Met a jour lien_questionnaire avec le lien de tracking /r/{id}
+    Migrer les affectations vers le bon systeme de liens.
+    - Survey partage (survey_id == enquete.survey_id) : lien_questionnaire = tracking /r/{id}, lien_direct = QP + custom1=token
+    - Survey individuel (survey_id != enquete.survey_id) : lien_questionnaire = lien_direct (URL QuestionPro directe)
     """
-    # Recuperer les affectations sans lien_questionnaire ou avec ancien format
     affectations = sb.table("affectations")\
-        .select("id, lien_questionnaire, lien_direct")\
+        .select("id, survey_id, enquete_id, enqueteur_id, lien_questionnaire, lien_direct, enquetes(survey_id), enqueteurs(token)")\
         .execute()
 
+    base_url = str(request.base_url)
     updated = 0
+
     for aff in affectations.data:
-        lien_q = aff.get("lien_questionnaire")
-        # Si pas de lien ou si c'est un ancien lien QuestionPro direct
-        if not lien_q or "questionpro.com" in (lien_q or ""):
-            new_link = f"{settings.BACKEND_URL}/r/{aff['id']}"
+        aff_survey_id = aff.get("survey_id")
+        enquete_survey_id = (aff.get("enquetes") or {}).get("survey_id")
+        enqueteur_token = (aff.get("enqueteurs") or {}).get("token")
+        is_individual = aff_survey_id and enquete_survey_id and aff_survey_id != enquete_survey_id
+
+        if is_individual:
+            # Survey individuel : lien_questionnaire = lien_direct (URL QuestionPro unique)
+            lien_direct = aff.get("lien_direct")
+            if lien_direct:
+                sb.table("affectations")\
+                    .update({"lien_questionnaire": lien_direct})\
+                    .eq("id", aff["id"])\
+                    .execute()
+                updated += 1
+        else:
+            # Survey partage : lien_questionnaire = tracking URL, lien_direct = QP + custom1=token
+            updates = {"lien_questionnaire": f"{base_url}r/{aff['id']}"}
+            if not aff.get("lien_direct") and aff_survey_id and enqueteur_token:
+                updates["lien_direct"] = f"https://hcakpo.questionpro.com/t/{aff_survey_id}?custom1={enqueteur_token}"
             sb.table("affectations")\
-                .update({"lien_questionnaire": new_link})\
+                .update(updates)\
                 .eq("id", aff["id"])\
                 .execute()
             updated += 1
@@ -1366,43 +1427,63 @@ def delete_segmentation(id: str, admin: dict = Depends(require_admin), sb: Clien
 
 @app.get("/admin/quotas/by-segmentation/{segmentation_id}")
 def get_quotas_by_segmentation(segmentation_id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Recuperer les quotas agreges d'une segmentation (somme par segment_value)"""
+    """Recuperer les quotas d'une segmentation avec valides/objectif (contexte: enquete entiere)"""
+    # Recuperer la segmentation pour connaitre l'enquete
+    seg_info = sb.table("segmentations").select("id, enquete_id").eq("id", segmentation_id).execute()
+    if not seg_info.data:
+        return []
+    enquete_id = seg_info.data[0]["enquete_id"]
+
+    # Objectif total de l'enquete = somme des objectifs de toutes les affectations
+    affectations = sb.table("affectations").select("id, objectif_total").eq("enquete_id", enquete_id).execute()
+    objectif_total_enquete = sum(a.get("objectif_total") or 0 for a in affectations.data)
+    aff_ids = [a["id"] for a in affectations.data]
+
+    # Completions par segment pour toutes les affectations de cette enquete
+    completions_par_segment = {}
+    if aff_ids:
+        cs = sb.table("completions_segments")\
+            .select("segment_value, completions")\
+            .in_("affectation_id", aff_ids)\
+            .execute()
+        for s in cs.data:
+            seg_norm = normalize_country_name(s.get("segment_value", ""))
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            completions_par_segment[seg_norm] = completions_par_segment.get(seg_norm, 0) + (s.get("completions") or 0)
+
+    # Quotas globaux
     quotas = sb.table("quotas")\
-        .select("id, segment_value, objectif, completions, affectation_id")\
+        .select("id, segment_value, pourcentage")\
         .eq("segmentation_id", segmentation_id)\
+        .is_("affectation_id", "null")\
         .execute()
 
     if not quotas.data:
         return []
 
-    # Agreger par segment_value
-    segments_agreg = {}
+    result = []
     for q in quotas.data:
         seg_val = q.get("segment_value", "")
-        if seg_val not in segments_agreg:
-            segments_agreg[seg_val] = {
-                "id": q["id"],  # Garder le premier ID pour compatibilite
-                "segment_value": seg_val,
-                "objectif": 0,
-                "completions": 0,  # Completions valides (min par quota)
-                "nb_enqueteurs": 0
-            }
-        objectif_indiv = q.get("objectif", 0) or 0
-        completions_indiv = q.get("completions", 0) or 0
-        # Completions valides = min(completions, objectif) pour chaque enqueteur
-        completions_valides = min(completions_indiv, objectif_indiv) if objectif_indiv > 0 else completions_indiv
+        pourcentage = q.get("pourcentage") or 0
+        objectif = int(objectif_total_enquete * pourcentage / 100)
+        seg_norm = normalize_country_name(seg_val)
+        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+        valides_brut = completions_par_segment.get(seg_norm, 0)
+        valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
+        result.append({
+            "id": q["id"],
+            "segment_value": seg_val,
+            "pourcentage": pourcentage,
+            "objectif": objectif,
+            "valides": valides,
+        })
 
-        segments_agreg[seg_val]["objectif"] += objectif_indiv
-        segments_agreg[seg_val]["completions"] += completions_valides
-        segments_agreg[seg_val]["nb_enqueteurs"] += 1
-
-    # Convertir en liste
-    return list(segments_agreg.values())
+    result.sort(key=lambda x: x["pourcentage"], reverse=True)
+    return result
 
 @app.get("/admin/quotas/by-enquete/{enquete_id}")
 def get_quotas_by_enquete(enquete_id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Recuperer les quotas agreges d'une enquete (somme des quotas individuels)"""
-    # D'abord recuperer les segmentations de l'enquete
+    """Recuperer les quotas d'une enquete avec les pourcentages"""
     segs = sb.table("segmentations").select("id, nom").eq("enquete_id", enquete_id).execute()
     if not segs.data:
         return []
@@ -1411,42 +1492,31 @@ def get_quotas_by_enquete(enquete_id: str, admin: dict = Depends(require_admin),
     for seg in segs.data:
         seg_id = seg["id"]
 
-        # Recuperer les quotas INDIVIDUELS de cette segmentation
-        quotas_indiv = sb.table("quotas")\
-            .select("segment_value, objectif, completions")\
+        # Recuperer les quotas globaux (affectation_id = null) pour cette segmentation
+        quotas_glob = sb.table("quotas")\
+            .select("id, segment_value, pourcentage")\
             .eq("segmentation_id", seg_id)\
-            .not_.is_("affectation_id", "null")\
+            .is_("affectation_id", "null")\
             .execute()
 
-        # Agreger par segment_value
-        segments_agreg = {}
-        for q in quotas_indiv.data:
-            seg_val = q.get("segment_value", "")
-            if seg_val not in segments_agreg:
-                segments_agreg[seg_val] = {"objectif": 0, "completions": 0, "nb_enqueteurs": 0}
-            segments_agreg[seg_val]["objectif"] += q.get("objectif", 0) or 0
-            segments_agreg[seg_val]["completions"] += q.get("completions", 0) or 0
-            segments_agreg[seg_val]["nb_enqueteurs"] += 1
-
-        # Convertir en liste
-        quotas_liste = [
-            {
-                "segment_value": seg_val,
-                "objectif": data["objectif"],
-                "completions": data["completions"],
-                "nb_enqueteurs": data["nb_enqueteurs"],
+        quotas_liste = []
+        total_pourcentage = 0
+        for q in (quotas_glob.data or []):
+            pct = q.get("pourcentage", 0) or 0
+            total_pourcentage += pct
+            quotas_liste.append({
+                "id": q["id"],
+                "segment_value": q.get("segment_value", ""),
+                "pourcentage": pct,
                 "segmentation_id": seg_id
-            }
-            for seg_val, data in segments_agreg.items()
-        ]
-        quotas_liste.sort(key=lambda x: x["completions"], reverse=True)
+            })
+        quotas_liste.sort(key=lambda x: x["pourcentage"], reverse=True)
 
         result.append({
             "segmentation_id": seg_id,
             "segmentation_nom": seg["nom"],
             "quotas": quotas_liste,
-            "total_objectif": sum(q["objectif"] for q in quotas_liste),
-            "total_completions": sum(q["completions"] for q in quotas_liste)
+            "total_pourcentage": total_pourcentage
         })
 
     return result
@@ -1463,7 +1533,14 @@ def get_quotas_by_affectation(affectation_id: str, admin: dict = Depends(require
 @app.post("/admin/quotas")
 def create_quota(data: CreateQuota, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """Creer un quota"""
-    res = sb.table("quotas").insert(data.dict()).execute()
+    quota_data = {
+        "enquete_id": data.enquete_id,
+        "segmentation_id": data.segmentation_id,
+        "affectation_id": data.affectation_id,
+        "segment_value": data.segment_value,
+        "pourcentage": data.pourcentage
+    }
+    res = sb.table("quotas").insert(quota_data).execute()
     if not res.data:
         raise HTTPException(status_code=400, detail="Erreur creation quota")
     return res.data[0]
@@ -1474,10 +1551,11 @@ def create_quotas_bulk(data: BulkQuotas, admin: dict = Depends(require_admin), s
     created = []
     for q in data.quotas:
         quota_data = {
+            "enquete_id": data.enquete_id,
             "segmentation_id": data.segmentation_id,
             "affectation_id": data.affectation_id,
             "segment_value": q.get("segment_value"),
-            "objectif": q.get("objectif", 0)
+            "pourcentage": float(q.get("pourcentage", 0))
         }
         res = sb.table("quotas").insert(quota_data).execute()
         if res.data:
@@ -1578,6 +1656,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
     enqueteur_token = enqueteur.get("token")
     segmentation_question_id = enquete.get("segmentation_question_id")
     enquete_id = aff.get("enquete_id")
+    enqueteur_id = aff.get("enqueteur_id")
 
     # 2. Determiner le systeme (ancien vs nouveau)
     is_ancien_systeme = survey_id_affectation and survey_id_enquete and str(survey_id_affectation) != str(survey_id_enquete)
@@ -1772,8 +1851,28 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
                             "updated_at": datetime.utcnow().isoformat()
                         }).eq("id", quota_id).execute()
 
-    # Note: L'historique est maintenant basé sur les timestamps QuestionPro directement
-    # Plus besoin d'enregistrer dans historique_completions
+    # 10. Sauvegarder dans historique_completions par date reelle de reponse QuestionPro
+    if enquete_id:
+        # Grouper les reponses par date QuestionPro (utctimestamp = timestamp Unix de soumission)
+        daily_counts = {}
+        for resp in enqueteur_responses:
+            utc_ts = resp.get("utctimestamp")
+            if utc_ts:
+                date = datetime.utcfromtimestamp(utc_ts).date().isoformat()
+                daily_counts[date] = daily_counts.get(date, 0) + 1
+
+        # Supprimer les anciennes entrees pour repartir propre
+        sb.table("historique_completions").delete().eq("affectation_id", affectation_id).execute()
+
+        # Inserer une ligne par date reelle de reponse
+        for date, count in daily_counts.items():
+            sb.table("historique_completions").upsert({
+                "date": date,
+                "affectation_id": affectation_id,
+                "enquete_id": enquete_id,
+                "completions": count,
+                "clics": 0
+            }, on_conflict="date,enquete_id,affectation_id").execute()
 
     return {
         "affectation_id": affectation_id,
@@ -1874,54 +1973,79 @@ def list_zones(admin: dict = Depends(require_admin), sb: Client = Depends(get_su
 
 @app.get("/admin/segmentations-stats")
 def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Stats des segmentations par enquete avec quotas (somme des quotas individuels)"""
-    # Recuperer toutes les enquetes
+    """Stats des segmentations par enquete avec valides/objectif pour chaque quota (contexte: enquete entiere)"""
     enquetes = sb.table("enquetes").select("id, code, nom").execute()
+
+    # Charger toutes les affectations en une fois
+    all_affectations = sb.table("affectations").select("id, enquete_id, objectif_total").execute()
+    # Charger tous les completions_segments en une fois
+    aff_ids_all = [a["id"] for a in all_affectations.data]
+    all_cs = {}
+    if aff_ids_all:
+        cs_data = sb.table("completions_segments").select("affectation_id, segment_value, completions").in_("affectation_id", aff_ids_all).execute()
+        for s in cs_data.data:
+            aid = s["affectation_id"]
+            if aid not in all_cs:
+                all_cs[aid] = []
+            all_cs[aid].append(s)
+
+    # Index affectations par enquete
+    aff_by_enquete = {}
+    for a in all_affectations.data:
+        eid = a["enquete_id"]
+        if eid not in aff_by_enquete:
+            aff_by_enquete[eid] = []
+        aff_by_enquete[eid].append(a)
 
     result = []
     for enq in enquetes.data:
         enquete_id = enq["id"]
+        affectations_enq = aff_by_enquete.get(enquete_id, [])
+        objectif_total_enquete = sum(a.get("objectif_total") or 0 for a in affectations_enq)
 
-        # Recuperer les segmentations de cette enquete
-        segmentations = sb.table("segmentations")\
-            .select("id, nom, question_id, question_text")\
-            .eq("enquete_id", enquete_id)\
-            .execute()
+        # Agregation des completions par segment normalise pour cette enquete
+        completions_enq = {}
+        for a in affectations_enq:
+            for s in all_cs.get(a["id"], []):
+                seg_norm = normalize_country_name(s.get("segment_value", ""))
+                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                completions_enq[seg_norm] = completions_enq.get(seg_norm, 0) + (s.get("completions") or 0)
+
+        segmentations = sb.table("segmentations").select("id, nom, question_text").eq("enquete_id", enquete_id).execute()
 
         enquete_segs = []
         for seg in segmentations.data:
-            # Recuperer les quotas INDIVIDUELS (affectation_id IS NOT NULL)
-            quotas_individuels = sb.table("quotas")\
-                .select("id, segment_value, objectif, completions, affectation_id")\
+            quotas_globaux = sb.table("quotas")\
+                .select("id, segment_value, pourcentage")\
                 .eq("segmentation_id", seg["id"])\
-                .not_.is_("affectation_id", "null")\
+                .is_("affectation_id", "null")\
                 .execute()
 
-            # Agreger par segment_value (somme des objectifs et completions de tous les enqueteurs)
-            segments_agreg = {}
-            for q in quotas_individuels.data:
+            quotas_liste = []
+            for q in quotas_globaux.data:
                 seg_val = q.get("segment_value", "")
-                if seg_val not in segments_agreg:
-                    segments_agreg[seg_val] = {"objectif": 0, "completions": 0}
-                segments_agreg[seg_val]["objectif"] += q.get("objectif", 0) or 0
-                segments_agreg[seg_val]["completions"] += q.get("completions", 0) or 0
+                pourcentage = q.get("pourcentage") or 0
+                objectif = int(objectif_total_enquete * pourcentage / 100)
+                seg_norm = normalize_country_name(seg_val)
+                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                valides_brut = completions_enq.get(seg_norm, 0)
+                valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
+                quotas_liste.append({
+                    "segment_value": seg_val,
+                    "pourcentage": pourcentage,
+                    "objectif": objectif,
+                    "valides": valides,
+                })
+            quotas_liste.sort(key=lambda x: x["pourcentage"], reverse=True)
 
-            # Convertir en liste pour l'API
-            quotas_liste = [
-                {"segment_value": seg_val, "objectif": data["objectif"], "completions": data["completions"]}
-                for seg_val, data in segments_agreg.items()
-            ]
-            # Trier par completions decroissant
-            quotas_liste.sort(key=lambda x: x["completions"], reverse=True)
-
-            total_completions = sum(q["completions"] for q in quotas_liste)
-            total_objectif = sum(q["objectif"] for q in quotas_liste)
+            total_valides = sum(q["valides"] for q in quotas_liste)
+            total_objectif = objectif_total_enquete
 
             enquete_segs.append({
                 "id": seg["id"],
                 "nom": seg["nom"],
                 "question_text": seg.get("question_text", ""),
-                "total_completions": total_completions,
+                "total_valides": total_valides,
                 "total_objectif": total_objectif,
                 "quotas": quotas_liste
             })
@@ -1946,7 +2070,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
 
     # Recuperer ses affectations avec les enquetes
     affectations = sb.table("affectations")\
-        .select("id, enquete_id, enquetes(id, code, nom)")\
+        .select("id, enquete_id, objectif_total, completions_total, enquetes(id, code, nom)")\
         .eq("enqueteur_id", id)\
         .execute()
 
@@ -1955,6 +2079,18 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
         enquete = aff.get("enquetes", {})
         enquete_id = aff.get("enquete_id")
         aff_id = aff["id"]
+        objectif_total_aff = aff.get("objectif_total") or 0
+
+        # Recuperer les completions_segments pour cette affectation specifique
+        cs_rows = sb.table("completions_segments")\
+            .select("segment_value, completions")\
+            .eq("affectation_id", aff_id)\
+            .execute()
+        completions_par_segment = {}
+        for cs in cs_rows.data:
+            seg_norm = normalize_country_name(cs.get("segment_value", ""))
+            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            completions_par_segment[seg_norm] = completions_par_segment.get(seg_norm, 0) + (cs.get("completions") or 0)
 
         # Recuperer les segmentations de cette enquete
         segmentations = sb.table("segmentations")\
@@ -1964,32 +2100,41 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
 
         enquete_segs = []
         for seg in segmentations.data:
-            # D'abord essayer les quotas individuels (lies a l'affectation)
-            quotas = sb.table("quotas")\
-                .select("id, segment_value, objectif, completions")\
+            # Quotas globaux (pourcentage)
+            quotas_rows = sb.table("quotas")\
+                .select("id, segment_value, pourcentage")\
                 .eq("segmentation_id", seg["id"])\
-                .eq("affectation_id", aff_id)\
-                .order("completions", desc=True)\
+                .is_("affectation_id", "null")\
+                .order("pourcentage", desc=True)\
                 .execute()
 
-            # Si pas de quotas individuels, fallback sur les quotas globaux
-            if not quotas.data:
-                quotas = sb.table("quotas")\
-                    .select("id, segment_value, objectif, completions")\
-                    .eq("segmentation_id", seg["id"])\
-                    .is_("affectation_id", "null")\
-                    .order("completions", desc=True)\
-                    .execute()
-
-            total_completions = sum(q.get("completions", 0) for q in quotas.data)
-            total_objectif = sum(q.get("objectif", 0) for q in quotas.data)
+            quotas_enriched = []
+            total_objectif = 0
+            total_valides = 0
+            for q in quotas_rows.data:
+                pourcentage = q.get("pourcentage") or 0
+                objectif = int(objectif_total_aff * pourcentage / 100)
+                seg_val = q.get("segment_value", "")
+                seg_norm = normalize_country_name(seg_val)
+                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                valides_brut = completions_par_segment.get(seg_norm, 0)
+                valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
+                total_objectif += objectif
+                total_valides += valides
+                quotas_enriched.append({
+                    "id": q["id"],
+                    "segment_value": seg_val,
+                    "pourcentage": pourcentage,
+                    "objectif": objectif,
+                    "valides": valides
+                })
 
             enquete_segs.append({
                 "id": seg["id"],
                 "nom": seg["nom"],
-                "total_completions": total_completions,
                 "total_objectif": total_objectif,
-                "quotas": quotas.data
+                "total_valides": total_valides,
+                "quotas": quotas_enriched
             })
 
         if enquete_segs:
@@ -2045,69 +2190,76 @@ def aggregate_responses_by_date(responses: list) -> list:
     return result
 
 @app.get("/admin/historique")
-async def get_historique_global(days: int = 30, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Historique global des completions (basé sur timestamps QuestionPro)"""
+def get_historique_global(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    days: int = 30,
+    admin: dict = Depends(require_admin),
+    sb: Client = Depends(get_supabase)
+):
+    """Historique global des completions depuis historique_completions (Supabase uniquement)"""
     from datetime import timedelta
 
-    # Date de debut
-    start_date = (datetime.utcnow() - timedelta(days=days)).date()
+    if not from_date:
+        from_date = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
+    if not to_date:
+        to_date = datetime.utcnow().date().isoformat()
 
-    # Recuperer toutes les enquetes avec leur survey_id
-    enquetes = sb.table("enquetes").select("id, survey_id").execute()
+    rows = sb.table("historique_completions")\
+        .select("date, completions, clics")\
+        .gte("date", from_date)\
+        .lte("date", to_date)\
+        .order("date")\
+        .execute()
 
-    # Agreger toutes les reponses de toutes les enquetes
-    all_daily_counts = {}
+    daily = {}
+    for r in rows.data:
+        d = r["date"]
+        if d not in daily:
+            daily[d] = {"date": d, "completions": 0, "clics": 0}
+        daily[d]["completions"] += r.get("completions") or 0
+        daily[d]["clics"] += r.get("clics") or 0
 
-    for enq in enquetes.data:
-        survey_id = enq.get("survey_id")
-        if not survey_id:
-            continue
+    return sorted(daily.values(), key=lambda x: x["date"])
 
-        # Recuperer toutes les reponses
-        responses = await fetch_all_survey_responses(survey_id)
-        daily_data = aggregate_responses_by_date(responses)
-
-        for day in daily_data:
-            date = day["date"]
-            if date not in all_daily_counts:
-                all_daily_counts[date] = 0
-            all_daily_counts[date] += day["completions"]
-
-    # Filtrer par date de debut et convertir en liste
-    result = []
-    for date, completions in all_daily_counts.items():
-        if datetime.fromisoformat(date).date() >= start_date:
-            result.append({"date": date, "completions": completions})
-
-    result.sort(key=lambda x: x["date"])
-    return result
 
 @app.get("/admin/historique/enquete/{enquete_id}")
-async def get_historique_enquete(enquete_id: str, days: int = 30, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Historique des completions pour une enquete (basé sur timestamps QuestionPro)"""
+def get_historique_enquete(
+    enquete_id: str,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    days: int = 30,
+    admin: dict = Depends(require_admin),
+    sb: Client = Depends(get_supabase)
+):
+    """Historique des completions pour une enquete depuis historique_completions"""
     from datetime import timedelta
 
-    start_date = (datetime.utcnow() - timedelta(days=days)).date()
+    if not from_date:
+        from_date = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
+    if not to_date:
+        to_date = datetime.utcnow().date().isoformat()
 
-    # Recuperer le survey_id de l'enquete
-    enquete = sb.table("enquetes").select("survey_id").eq("id", enquete_id).execute()
-    if not enquete.data:
-        raise HTTPException(status_code=404, detail="Enquete introuvable")
+    rows = sb.table("historique_completions")\
+        .select("date, completions, clics")\
+        .eq("enquete_id", enquete_id)\
+        .gte("date", from_date)\
+        .lte("date", to_date)\
+        .order("date")\
+        .execute()
 
-    survey_id = enquete.data[0].get("survey_id")
-    if not survey_id:
-        return []
+    daily = {}
+    for r in rows.data:
+        d = r["date"]
+        if d not in daily:
+            daily[d] = {"date": d, "completions": 0, "clics": 0}
+        daily[d]["completions"] += r.get("completions") or 0
+        daily[d]["clics"] += r.get("clics") or 0
 
-    # Recuperer toutes les reponses
-    responses = await fetch_all_survey_responses(survey_id)
-    daily_data = aggregate_responses_by_date(responses)
-
-    # Filtrer par date de debut
-    result = [d for d in daily_data if datetime.fromisoformat(d["date"]).date() >= start_date]
-    return result
+    return sorted(daily.values(), key=lambda x: x["date"])
 
 @app.get("/enqueteur/{id}/historique")
-def get_historique_enqueteur(id: str, days: int = 30, sb: Client = Depends(get_supabase)):
+def get_historique_enqueteur(id: str, from_date: Optional[str] = None, to_date: Optional[str] = None, days: int = 30, sb: Client = Depends(get_supabase)):
     """Historique des completions pour un enqueteur (basé sur la table historique_completions)"""
     from datetime import timedelta
 
@@ -2116,37 +2268,34 @@ def get_historique_enqueteur(id: str, days: int = 30, sb: Client = Depends(get_s
     if not enq.data:
         raise HTTPException(status_code=404, detail="Enqueteur introuvable")
 
-    start_date = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
+    if not from_date:
+        from_date = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
+    if not to_date:
+        to_date = datetime.utcnow().date().isoformat()
 
     # Recuperer les affectations de cet enqueteur
-    affectations = sb.table("affectations")\
-        .select("id")\
-        .eq("enqueteur_id", id)\
-        .execute()
-
+    affectations = sb.table("affectations").select("id").eq("enqueteur_id", id).execute()
     if not affectations.data:
         return []
-
     aff_ids = [a["id"] for a in affectations.data]
 
-    # Recuperer l'historique depuis la table historique_completions
     historique = sb.table("historique_completions")\
-        .select("date, completions")\
+        .select("date, completions, clics")\
         .in_("affectation_id", aff_ids)\
-        .gte("date", start_date)\
+        .gte("date", from_date)\
+        .lte("date", to_date)\
         .order("date")\
         .execute()
 
-    # Agreger par date (car un enqueteur peut avoir plusieurs affectations)
-    daily_counts = {}
+    daily = {}
     for h in historique.data:
         date = h["date"]
-        if date not in daily_counts:
-            daily_counts[date] = 0
-        daily_counts[date] += h.get("completions", 0)
+        if date not in daily:
+            daily[date] = {"completions": 0, "clics": 0}
+        daily[date]["completions"] += h.get("completions", 0) or 0
+        daily[date]["clics"] += h.get("clics", 0) or 0
 
-    # Convertir en liste
-    result = [{"date": date, "completions": completions} for date, completions in daily_counts.items()]
+    result = [{"date": date, **vals} for date, vals in daily.items()]
     result.sort(key=lambda x: x["date"])
     return result
 
