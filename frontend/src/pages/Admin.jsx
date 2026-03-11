@@ -612,11 +612,12 @@ function CheckIcon() {
   )
 }
 
-function XIcon() {
+function ExcedentIcon() {
   return (
     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
+      <line x1="4" y1="14" x2="20" y2="14" />
+      <polyline points="8 10 12 6 16 10" />
+      <line x1="12" y1="6" x2="12" y2="20" />
     </svg>
   )
 }
@@ -1049,7 +1050,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
       {statutFilter === 'all' && selectedEnqueteIds.length === 0 ? (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <KPICard label="Valides" value={dashboard?.total_valides || 0} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
-          <KPICard label="Excedent" value={dashboard?.total_invalides || 0} icon={<XIcon />} color="#DC2626" bgColor="#FEF2F2" />
+          <KPICard label="Excedent" value={dashboard?.total_invalides || 0} icon={<ExcedentIcon />} color="#DC2626" bgColor="#FEF2F2" />
           <KPICard label="Echantillon" value={dashboard?.total_objectif || 0} icon={<TargetIcon />} color="#2563EB" bgColor="#EFF6FF" />
           <KPICard label="Conversion" value={`${tauxConversionGlobal}%`} icon={<ChartIcon />} color="#7C3AED" bgColor="#F5F3FF" />
           <KPICard label="Clics" value={dashboard?.total_clics || 0} icon={<ClickIcon />} color="#D97706" bgColor="#FFFBEB" />
