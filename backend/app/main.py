@@ -1270,8 +1270,11 @@ def create_affectation(data: CreateAffectation, request: Request, admin: dict = 
 
     aff_id = res.data[0]["id"]
 
-    # Lien de tracking construit depuis l'URL de la requete (pas besoin de BACKEND_URL)
-    lien_questionnaire = f"{str(request.base_url)}r/{aff_id}"
+    # Lien de tracking avec https force en production
+    base_url = str(request.base_url).rstrip('/')
+    if base_url.startswith('http://') and 'localhost' not in base_url:
+        base_url = 'https://' + base_url[7:]
+    lien_questionnaire = f"{base_url}/r/{aff_id}"
 
     sb.table("affectations")\
         .update({"lien_questionnaire": lien_questionnaire})\
