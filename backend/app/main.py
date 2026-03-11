@@ -211,12 +211,21 @@ async def fetch_survey_stats(survey_id: str) -> dict:
             return None
         data = response.json()
         survey = data.get("response", {})
+        # Recuperer le lien du survey (plusieurs champs possibles selon la version API)
+        survey_url = (
+            survey.get("shortUrl") or
+            survey.get("webLink") or
+            survey.get("surveyUrl") or
+            survey.get("url") or
+            ""
+        )
         return {
             "completions": survey.get("completedResponses", 0),
             "clics": survey.get("viewedResponses", 0),
             "started": survey.get("startedResponses", 0),
             "name": survey.get("name", ""),
             "description": survey.get("description", ""),
+            "survey_url": survey_url,
         }
 
 async def fetch_survey_questions(survey_id: str) -> list:
@@ -1235,7 +1244,7 @@ def list_affectations_by_enquete(enquete_id: str, admin: dict = Depends(require_
     return affectations.data
 
 @app.post("/admin/affectations")
-def create_affectation(data: CreateAffectation, request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+async def create_affectation(data: CreateAffectation, request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """Creer une nouvelle affectation"""
     # Verifier que l'enquete existe et recuperer son survey_id
     enquete = sb.table("enquetes").select("id, survey_id").eq("id", data.enquete_id).execute()
@@ -1251,10 +1260,15 @@ def create_affectation(data: CreateAffectation, request: Request, admin: dict = 
 
     enqueteur_token = enqueteur.data[0].get("token")
 
-    # Generer le lien direct QuestionPro avec custom1=token (survey partage)
+    # Recuperer le vrai lien du survey depuis QuestionPro
     lien_direct = None
     if survey_id and enqueteur_token:
-        lien_direct = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enqueteur_token}"
+        survey_info = await fetch_survey_stats(survey_id)
+        survey_url = survey_info.get("survey_url", "") if survey_info else ""
+        if survey_url:
+            lien_direct = f"{survey_url}?custom1={enqueteur_token}"
+        else:
+            lien_direct = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enqueteur_token}"
 
     affectation_data = {
         "enquete_id": data.enquete_id,
@@ -1347,11 +1361,11 @@ def get_affectation_clics(id: str, admin: dict = Depends(require_admin), sb: Cli
     }
 
 @app.post("/admin/affectations/migrate-links")
-def migrate_affectation_links(request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+async def migrate_affectation_links(request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """
     Migrer les affectations vers le bon systeme de liens.
-    - Survey partage (survey_id == enquete.survey_id) : lien_questionnaire = tracking /r/{id}, lien_direct = QP + custom1=token
-    - Survey individuel (survey_id != enquete.survey_id) : lien_questionnaire = lien_direct (URL QuestionPro directe)
+    - Survey partage : lien_questionnaire = tracking /r/{id}, lien_direct = vrai URL QP + custom1=token
+    - Survey individuel : lien_questionnaire = lien_direct (URL QuestionPro directe)
     """
     affectations = sb.table("affectations")\
         .select("id, survey_id, enquete_id, enqueteur_id, lien_questionnaire, lien_direct, enquetes(survey_id), enqueteurs(token)")\
@@ -1362,6 +1376,9 @@ def migrate_affectation_links(request: Request, admin: dict = Depends(require_ad
         base_url = 'https://' + base_url[7:]
     updated = 0
 
+    # Cache des URLs par survey_id pour eviter les appels API repetitifs
+    survey_url_cache = {}
+
     for aff in affectations.data:
         aff_survey_id = aff.get("survey_id")
         enquete_survey_id = (aff.get("enquetes") or {}).get("survey_id")
@@ -1369,7 +1386,6 @@ def migrate_affectation_links(request: Request, admin: dict = Depends(require_ad
         is_individual = aff_survey_id and enquete_survey_id and aff_survey_id != enquete_survey_id
 
         if is_individual:
-            # Survey individuel : lien_questionnaire = lien_direct (URL QuestionPro unique)
             lien_direct = aff.get("lien_direct")
             if lien_direct:
                 sb.table("affectations")\
@@ -1378,10 +1394,17 @@ def migrate_affectation_links(request: Request, admin: dict = Depends(require_ad
                     .execute()
                 updated += 1
         else:
-            # Survey partage : toujours reconstruire les deux liens
             updates = {"lien_questionnaire": f"{base_url}/r/{aff['id']}"}
             if aff_survey_id and enqueteur_token:
-                updates["lien_direct"] = f"https://hcakpo.questionpro.com/t/{aff_survey_id}?custom1={enqueteur_token}"
+                # Recuperer le vrai URL depuis QP (avec cache)
+                if aff_survey_id not in survey_url_cache:
+                    survey_info = await fetch_survey_stats(aff_survey_id)
+                    survey_url_cache[aff_survey_id] = (survey_info or {}).get("survey_url", "")
+                survey_url = survey_url_cache[aff_survey_id]
+                if survey_url:
+                    updates["lien_direct"] = f"{survey_url}?custom1={enqueteur_token}"
+                else:
+                    updates["lien_direct"] = f"https://hcakpo.questionpro.com/t/{aff_survey_id}?custom1={enqueteur_token}"
             sb.table("affectations")\
                 .update(updates)\
                 .eq("id", aff["id"])\
