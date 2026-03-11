@@ -1357,7 +1357,9 @@ def migrate_affectation_links(request: Request, admin: dict = Depends(require_ad
         .select("id, survey_id, enquete_id, enqueteur_id, lien_questionnaire, lien_direct, enquetes(survey_id), enqueteurs(token)")\
         .execute()
 
-    base_url = str(request.base_url)
+    base_url = str(request.base_url).rstrip('/')
+    if base_url.startswith('http://') and 'localhost' not in base_url:
+        base_url = 'https://' + base_url[7:]
     updated = 0
 
     for aff in affectations.data:
@@ -1376,9 +1378,9 @@ def migrate_affectation_links(request: Request, admin: dict = Depends(require_ad
                     .execute()
                 updated += 1
         else:
-            # Survey partage : lien_questionnaire = tracking URL, lien_direct = QP + custom1=token
-            updates = {"lien_questionnaire": f"{base_url}r/{aff['id']}"}
-            if not aff.get("lien_direct") and aff_survey_id and enqueteur_token:
+            # Survey partage : toujours reconstruire les deux liens
+            updates = {"lien_questionnaire": f"{base_url}/r/{aff['id']}"}
+            if aff_survey_id and enqueteur_token:
                 updates["lien_direct"] = f"https://hcakpo.questionpro.com/t/{aff_survey_id}?custom1={enqueteur_token}"
             sb.table("affectations")\
                 .update(updates)\
