@@ -8,6 +8,7 @@ import {
   listAffectationsByEnquete,
   updateAffectation,
   syncAll,
+  migrateLinks,
   getEnqueteur,
   getEnqueteurSegmentations,
   getHistoriqueEnqueteur,
@@ -169,6 +170,17 @@ export default function Admin() {
     }
   }
 
+  async function handleMigrateLinks() {
+    if (!confirm('Migrer les liens de toutes les affectations ? (corrige http → https)')) return
+    try {
+      const res = await migrateLinks()
+      alert(`Migration terminee : ${res.updated || 0} affectations mises a jour`)
+      await loadAll()
+    } catch (err) {
+      alert('Erreur lors de la migration')
+    }
+  }
+
   function openEnqueteModal(enquete = null) {
     setEditingEnquete(enquete)
     setShowEnqueteModal(true)
@@ -298,6 +310,17 @@ export default function Admin() {
                 {syncing ? 'Synchronisation...' : 'Synchroniser'}
               </span>
             )}
+          </button>
+          <button
+            onClick={handleMigrateLinks}
+            title="Corriger les liens de collecte (http → https)"
+            className="w-full p-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]"
+          >
+            <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+            {!sidebarCollapsed && <span className="text-xs font-medium">Migrer les liens</span>}
           </button>
 
           <button

@@ -203,6 +203,9 @@ export const syncAll = () =>
 export const syncAffectation = (affectationId) =>
   API.post(`/admin/sync/${affectationId}`).then(r => r.data)
 
+export const migrateLinks = () =>
+  API.post('/admin/affectations/migrate-links').then(r => r.data)
+
 // ══════════════════════════════════════════════════════════════════════════════
 // ADMIN - STATS
 // ══════════════════════════════════════════════════════════════════════════════
