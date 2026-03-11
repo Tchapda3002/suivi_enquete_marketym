@@ -1049,7 +1049,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
       {statutFilter === 'all' && selectedEnqueteIds.length === 0 ? (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <KPICard label="Valides" value={dashboard?.total_valides || 0} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
-          <KPICard label="Invalides" value={dashboard?.total_invalides || 0} icon={<XIcon />} color="#DC2626" bgColor="#FEF2F2" />
+          <KPICard label="Excedent" value={dashboard?.total_invalides || 0} icon={<XIcon />} color="#DC2626" bgColor="#FEF2F2" />
           <KPICard label="Echantillon" value={dashboard?.total_objectif || 0} icon={<TargetIcon />} color="#2563EB" bgColor="#EFF6FF" />
           <KPICard label="Conversion" value={`${tauxConversionGlobal}%`} icon={<ChartIcon />} color="#7C3AED" bgColor="#F5F3FF" />
           <KPICard label="Clics" value={dashboard?.total_clics || 0} icon={<ClickIcon />} color="#D97706" bgColor="#FFFBEB" />
@@ -3148,7 +3148,7 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
                   </div>
                   <div className="p-2 rounded-lg bg-[#FEF2F2] text-center">
                     <p className="text-lg font-bold text-[#DC2626]">{invalides}</p>
-                    <p className="text-[10px] text-[#DC2626]">Invalides</p>
+                    <p className="text-[10px] text-[#DC2626]">Excedent</p>
                   </div>
                   <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
                     <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
@@ -3180,7 +3180,7 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
             </Card>
             <Card className="p-4">
               <p className="text-2xl font-bold text-[#DC2626]">{totalInvalides}</p>
-              <p className="text-xs text-[#6B7280]">Invalides</p>
+              <p className="text-xs text-[#6B7280]">Excedent</p>
             </Card>
             <Card className="p-4">
               <p className="text-2xl font-bold text-[#7C3AED]">{totalClics}</p>
@@ -3314,7 +3314,7 @@ function MyEnqueteDetailView({ affectation, onBack }) {
         </Card>
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#DC2626]">{invalides}</p>
-          <p className="text-xs text-[#6B7280]">Invalides</p>
+          <p className="text-xs text-[#6B7280]">Excedent</p>
         </Card>
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#7C3AED]">{affectation.clics || 0}</p>

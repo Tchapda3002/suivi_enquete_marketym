@@ -280,7 +280,7 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <KPICard label="Completions" value={totalCompletions} subValue={`/ ${totalObjectif}`} color="#059669" />
         <KPICard label="Objectif" value={totalObjectif} subValue="reponses" color="#2563EB" />
-        <KPICard label="Invalides" value={totalInvalides} subValue="reponses" color="#DC2626" />
+        <KPICard label="Excedent" value={totalInvalides} subValue="reponses" color="#DC2626" />
         <KPICard label="Clics" value={totalClics} subValue="ouvertures" color="#7C3AED" />
         <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
       </div>
@@ -479,7 +479,7 @@ function EnquetesTab({ affectations, onSelect }) {
                 </div>
                 <div className="p-2 rounded-lg bg-[#FEF2F2] text-center">
                   <p className="text-lg font-bold text-[#DC2626]">{invalides}</p>
-                  <p className="text-[10px] text-[#DC2626]">Invalides</p>
+                  <p className="text-[10px] text-[#DC2626]">Excedent</p>
                 </div>
                 <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
                   <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
@@ -558,7 +558,7 @@ function EnqueteDetail({ affectation, segmentations, onBack }) {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <KPICard label="Valides" value={completions} subValue={`/ ${affectation.objectif_total}`} color="#059669" />
         <KPICard label="Objectif" value={affectation.objectif_total} subValue="reponses" color="#2563EB" />
-        <KPICard label="Invalides" value={invalides} subValue="reponses" color="#DC2626" />
+        <KPICard label="Excedent" value={invalides} subValue="reponses" color="#DC2626" />
         <KPICard label="Clics" value={affectation.clics || 0} subValue="ouvertures" color="#7C3AED" />
         <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
       </div>
@@ -916,7 +916,7 @@ function ProfilTab({ enqueteur, onUpdate }) {
           </div>
           <div className="p-4 rounded-xl bg-[#FEF2F2] text-center">
             <p className="text-2xl font-bold text-[#DC2626]">{totalInvalides}</p>
-            <p className="text-xs text-[#DC2626]">Invalides</p>
+            <p className="text-xs text-[#DC2626]">Excedent</p>
           </div>
           <div className="p-4 rounded-xl bg-[#F5F3FF] text-center">
             <p className="text-2xl font-bold text-[#7C3AED]">{totalObjectif}</p>
