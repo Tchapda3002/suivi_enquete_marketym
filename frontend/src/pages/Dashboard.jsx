@@ -477,9 +477,9 @@ function EnquetesTab({ affectations, onSelect }) {
                   <p className="text-lg font-bold text-[#059669]">{completions}</p>
                   <p className="text-[10px] text-[#059669]">Valides</p>
                 </div>
-                <div className="p-2 rounded-lg bg-[#FEF2F2] text-center">
-                  <p className="text-lg font-bold text-[#DC2626]">{invalides}</p>
-                  <p className="text-[10px] text-[#DC2626]">Excedent</p>
+                <div className="p-2 rounded-lg bg-[#FFF7ED] text-center">
+                  <p className="text-lg font-bold text-[#D97706]">{invalides}</p>
+                  <p className="text-[10px] text-[#D97706]">Excedent</p>
                 </div>
                 <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
                   <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
@@ -914,9 +914,9 @@ function ProfilTab({ enqueteur, onUpdate }) {
             <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
             <p className="text-xs text-[#059669]">Completions</p>
           </div>
-          <div className="p-4 rounded-xl bg-[#FEF2F2] text-center">
-            <p className="text-2xl font-bold text-[#DC2626]">{totalInvalides}</p>
-            <p className="text-xs text-[#DC2626]">Excedent</p>
+          <div className="p-4 rounded-xl bg-[#FFF7ED] text-center">
+            <p className="text-2xl font-bold text-[#D97706]">{totalInvalides}</p>
+            <p className="text-xs text-[#D97706]">Excedent</p>
           </div>
           <div className="p-4 rounded-xl bg-[#F5F3FF] text-center">
             <p className="text-2xl font-bold text-[#7C3AED]">{totalObjectif}</p>
