@@ -30,6 +30,10 @@ import {
   createQuotasBulk,
   updateQuota,
   deleteQuota,
+  getQuotaConfigsByEnquete,
+  createQuotaConfig,
+  deleteQuotaConfig,
+  generateCombinations,
   getSegmentationsStats,
   getHistoriqueGlobal,
   getHistoriqueEnquete,
@@ -233,7 +237,7 @@ export default function Admin() {
             <div className="grid grid-cols-2 gap-2">
               <div className="p-3 rounded-lg bg-[#F9FAFB]">
                 <p className="text-lg font-bold text-[#111827]">{dashboard.total_valides}</p>
-                <p className="text-[10px] text-[#9CA3AF]">Valides</p>
+                <p className="text-[10px] text-[#9CA3AF]">Completions</p>
               </div>
               <div className="p-3 rounded-lg bg-[#ECFDF5]">
                 <p className="text-lg font-bold text-[#059669]">{dashboard.taux_completion}%</p>
@@ -612,15 +616,6 @@ function CheckIcon() {
   )
 }
 
-function ExcedentIcon() {
-  return (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <line x1="4" y1="14" x2="20" y2="14" />
-      <polyline points="8 10 12 6 16 10" />
-      <line x1="12" y1="6" x2="12" y2="20" />
-    </svg>
-  )
-}
 
 function TargetIcon() {
   return (
@@ -1049,8 +1044,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
       {/* KPIs - adaptes au filtre */}
       {statutFilter === 'all' && selectedEnqueteIds.length === 0 ? (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-          <KPICard label="Valides" value={dashboard?.total_valides || 0} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
-          <KPICard label="Excedent" value={dashboard?.total_invalides || 0} icon={<ExcedentIcon />} color="#D97706" bgColor="#FFF7ED" />
+          <KPICard label="Completions" value={dashboard?.total_valides || 0} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
           <KPICard label="Echantillon" value={dashboard?.total_objectif || 0} icon={<TargetIcon />} color="#2563EB" bgColor="#EFF6FF" />
           <KPICard label="Conversion" value={`${tauxConversionGlobal}%`} icon={<ChartIcon />} color="#7C3AED" bgColor="#F5F3FF" />
           <KPICard label="Clics" value={dashboard?.total_clics || 0} icon={<ClickIcon />} color="#D97706" bgColor="#FFFBEB" />
@@ -1058,7 +1052,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <KPICard label="Enquetes" value={filteredEnquetes.length} icon={<ClipboardIcon />} color="#2563EB" bgColor="#EFF6FF" />
-          <KPICard label="Valides" value={filteredTotalValides} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
+          <KPICard label="Completions" value={filteredTotalValides} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
           <KPICard label="Echantillon" value={filteredTotalObjectif} icon={<TargetIcon />} color="#7C3AED" bgColor="#F5F3FF" />
           <KPICard label="Conversion" value={`${filteredTauxConversion}%`} icon={<ChartIcon />} color="#D97706" bgColor="#FFFBEB" />
           <KPICard label="Clics" value={filteredTotalClics} icon={<ClickIcon />} color="#6B7280" bgColor="#F3F4F6" />
@@ -1083,7 +1077,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
           />
           <div className="flex justify-between mt-2 text-xs">
             <span className="text-[#059669] font-medium">
-              {(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.total_valides || 0) : filteredTotalValides} valides
+              {(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.total_valides || 0) : filteredTotalValides} completions
             </span>
             <span className="text-[#6B7280]">
               Echantillon: {(statutFilter === 'all' && selectedEnqueteIds.length === 0) ? (dashboard?.total_objectif || 0) : filteredTotalObjectif}
@@ -1208,7 +1202,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
               <tr className="border-b border-[#E5E7EB]">
                 <th className="text-left py-2 px-4 text-[10px] font-semibold text-[#6B7280] uppercase">#</th>
                 <SortableHeader label="Enqueteur" k="nom" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} className="py-2" />
-                <SortableHeader label="Valides" k="valides" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} align="center" className="py-2" />
+                <SortableHeader label="Completions" k="valides" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} align="center" className="py-2" />
                 <SortableHeader label="Progression" k="pct" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} className="py-2" />
               </tr>
             </thead>
@@ -1435,7 +1429,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
           </div>
           <div className="p-4 rounded-xl bg-[#ECFDF5]">
             <p className="text-xl font-bold text-[#059669]">{totalCompletions}</p>
-            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Valides</p>
+            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Completions</p>
           </div>
           <div className="p-4 rounded-xl bg-[#F5F3FF]">
             <p className="text-xl font-bold text-[#7C3AED]">{pct}%</p>
@@ -1493,7 +1487,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                     <tr className="bg-[#F9FAFB] border-b border-[#E5E7EB]">
                       <SortableHeader label="Enqueteur" k="nom" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} />
                       <SortableHeader label="Clics" k="clics" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
-                      <SortableHeader label="Valides" k="valides" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
+                      <SortableHeader label="Completions" k="valides" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
                       <SortableHeader label="Progression" k="pct" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} />
                       <SortableHeader label="Statut" k="statut" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
                       <th className="px-4 py-3"></th>
@@ -1583,6 +1577,27 @@ function SegmentationsTab({ enquete, segmentations, onRefresh }) {
   const [selectedSeg, setSelectedSeg] = useState(null)
   const [questions, setQuestions] = useState([])
   const [loadingQuestions, setLoadingQuestions] = useState(false)
+  const [quotaConfigs, setQuotaConfigs] = useState([])
+  const [showAddQuotaConfig, setShowAddQuotaConfig] = useState(false)
+
+  useEffect(() => {
+    if (enquete.id) loadQuotaConfigs()
+  }, [enquete.id])
+
+  async function loadQuotaConfigs() {
+    try {
+      const data = await getQuotaConfigsByEnquete(enquete.id)
+      setQuotaConfigs(data)
+    } catch (err) {
+      console.error('Erreur chargement quota configs:', err)
+    }
+  }
+
+  async function handleDeleteQuotaConfig(id) {
+    if (!confirm('Supprimer ce quota croise et toutes ses combinaisons ?')) return
+    await deleteQuotaConfig(id)
+    loadQuotaConfigs()
+  }
 
   // Charger les questions du survey pour la creation
   async function loadQuestions() {
@@ -1599,12 +1614,13 @@ function SegmentationsTab({ enquete, segmentations, onRefresh }) {
   }
 
   async function handleCreateSegmentation(data) {
-    // 1. Creer la segmentation
+    // 1. Creer la segmentation avec answer_options
     const seg = await createSegmentation({
       enquete_id: enquete.id,
       question_id: data.question_id,
       question_text: data.question_text,
       nom: data.nom,
+      answer_options: data.answer_options || [],
     })
 
     // 2. Creer les quotas si fournis
@@ -1676,7 +1692,356 @@ function SegmentationsTab({ enquete, segmentations, onRefresh }) {
           onSave={handleCreateSegmentation}
         />
       )}
+
+      {/* Section Quotas Croises */}
+      {segmentations.length >= 2 && (
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-[#111827]">Quotas croises</h3>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setShowAddQuotaConfig(true)}
+            >
+              <PlusIcon />
+              <span className="ml-1">Nouveau croisement</span>
+            </Button>
+          </div>
+
+          {quotaConfigs.length === 0 ? (
+            <div className="py-8 text-center text-sm text-[#9CA3AF]">
+              Aucun quota croise. Croisez plusieurs segmentations (ex: Pays x Secteur).
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {quotaConfigs.map(config => (
+                <QuotaConfigCard
+                  key={config.id}
+                  config={config}
+                  onDelete={() => handleDeleteQuotaConfig(config.id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showAddQuotaConfig && (
+        <AddQuotaConfigModal
+          enquete={enquete}
+          segmentations={segmentations}
+          onClose={() => setShowAddQuotaConfig(false)}
+          onSave={() => { loadQuotaConfigs(); setShowAddQuotaConfig(false) }}
+        />
+      )}
     </div>
+  )
+}
+
+function QuotaConfigCard({ config, onDelete }) {
+  const [expanded, setExpanded] = useState(false)
+  const quotas = config.quotas || []
+  const totalPct = quotas.reduce((s, q) => s + (q.pourcentage || 0), 0)
+  const totalCompletions = quotas.reduce((s, q) => s + (q.completions || 0), 0)
+  const totalObjectif = quotas.reduce((s, q) => s + (q.objectif || 0), 0)
+
+  return (
+    <Card className="overflow-hidden">
+      <div
+        className="flex items-center justify-between p-4 cursor-pointer hover:bg-[#F9FAFB]"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-3">
+          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${expanded ? 'bg-[#7C3AED] text-white' : 'bg-[#F3F4F6] text-[#6B7280]'}`}>
+            <svg className={`w-4 h-4 transition-transform ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-[#111827]">{config.nom}</p>
+            <p className="text-xs text-[#6B7280]">
+              {(config.questions || []).map(q => q.segmentations?.nom).join(' x ')} — {quotas.length} combinaisons
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            <p className="text-sm font-mono font-medium text-[#111827]">{totalCompletions}/{totalObjectif}</p>
+            <p className="text-xs text-[#6B7280]">{Math.round(totalPct)}%</p>
+          </div>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete() }}
+            className="p-1.5 rounded hover:bg-[#FEF2F2] text-[#DC2626]"
+          >
+            <TrashIcon />
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-[#E5E7EB] p-4 bg-[#F9FAFB]">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[#E5E7EB]">
+                  {(config.questions || []).map(q => (
+                    <th key={q.id} className="text-left py-2 px-3 text-xs font-medium text-[#6B7280]">
+                      {q.segmentations?.nom}
+                    </th>
+                  ))}
+                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">%</th>
+                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Objectif</th>
+                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Completions</th>
+                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Progression</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quotas.map((q, i) => {
+                  const combo = q.combination || {}
+                  const pct = q.progression || 0
+                  return (
+                    <tr key={i} className="border-b border-[#F3F4F6] hover:bg-white">
+                      {(config.questions || []).map(qq => (
+                        <td key={qq.id} className="py-2 px-3 text-[#111827]">
+                          {combo[qq.segmentations?.nom] || '-'}
+                        </td>
+                      ))}
+                      <td className="py-2 px-3 text-right font-mono text-[#6B7280]">{q.pourcentage}%</td>
+                      <td className="py-2 px-3 text-right font-mono text-[#111827]">{q.objectif}</td>
+                      <td className="py-2 px-3 text-right font-mono text-[#059669]">{q.completions}</td>
+                      <td className="py-2 px-3 text-right">
+                        <span className="text-xs font-semibold" style={{ color: pct >= 100 ? '#059669' : pct >= 50 ? '#D97706' : '#DC2626' }}>
+                          {Math.round(pct)}%
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function AddQuotaConfigModal({ enquete, segmentations, onClose, onSave }) {
+  const [step, setStep] = useState(1) // 1: select segs, 2: set percentages
+  const [nom, setNom] = useState('')
+  const [selectedSegIds, setSelectedSegIds] = useState([])
+  const [combinations, setCombinations] = useState([]) // [{combination: {}, pourcentage: 0}]
+  const [generating, setGenerating] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const segsWithOptions = segmentations.filter(s => s.answer_options && s.answer_options.length > 0)
+  const selectedSegs = segmentations.filter(s => selectedSegIds.includes(s.id))
+
+  function toggleSeg(id) {
+    setSelectedSegIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    )
+  }
+
+  async function handleGenerate() {
+    if (selectedSegIds.length < 2) return alert('Selectionnez au moins 2 segmentations')
+    if (!nom.trim()) {
+      // Auto-generate name
+      setNom(selectedSegs.map(s => s.nom).join(' x '))
+    }
+
+    setGenerating(true)
+    try {
+      // Generate combinations locally from answer_options
+      const axes = selectedSegs.map(s => ({
+        nom: s.nom,
+        values: (s.answer_options || []).map(o => o.text || o.value || o.label || String(o))
+      }))
+
+      // Cartesian product
+      let combos = [{}]
+      for (const axis of axes) {
+        const newCombos = []
+        for (const existing of combos) {
+          for (const val of axis.values) {
+            newCombos.push({ ...existing, [axis.nom]: val })
+          }
+        }
+        combos = newCombos
+      }
+
+      setCombinations(combos.map(c => ({ combination: c, pourcentage: 0 })))
+      setStep(2)
+    } catch (err) {
+      console.error('Erreur generation:', err)
+      alert('Erreur lors de la generation des combinaisons')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  function updatePourcentage(index, value) {
+    setCombinations(prev => prev.map((c, i) => i === index ? { ...c, pourcentage: parseFloat(value) || 0 } : c))
+  }
+
+  function distribuerEquitablement() {
+    if (combinations.length === 0) return
+    const pct = Math.round((100 / combinations.length) * 100) / 100
+    const reste = Math.round((100 - pct * (combinations.length - 1)) * 100) / 100
+    setCombinations(prev => prev.map((c, i) => ({
+      ...c,
+      pourcentage: i === prev.length - 1 ? reste : pct
+    })))
+  }
+
+  const totalPct = combinations.reduce((s, c) => s + (c.pourcentage || 0), 0)
+
+  async function handleSave() {
+    const finalNom = nom.trim() || selectedSegs.map(s => s.nom).join(' x ')
+    const quotasToCreate = combinations.filter(c => c.pourcentage > 0)
+    if (quotasToCreate.length === 0) return alert('Definissez au moins un pourcentage')
+
+    setSaving(true)
+    try {
+      await createQuotaConfig({
+        enquete_id: enquete.id,
+        nom: finalNom,
+        segmentation_ids: selectedSegIds,
+        quotas: quotasToCreate
+      })
+      onSave()
+    } catch (err) {
+      console.error('Erreur creation quota config:', err)
+      alert('Erreur: ' + (err.response?.data?.detail || err.message))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal isOpen={true} onClose={onClose} title="Nouveau quota croise" size="lg">
+      {step === 1 ? (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-[#374151] mb-1.5">Nom du croisement</label>
+            <Input
+              value={nom}
+              onChange={e => setNom(e.target.value)}
+              placeholder="Ex: Pays x Secteur (auto-genere si vide)"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-[#374151] mb-2">
+              Segmentations a croiser (min. 2)
+            </label>
+            {segsWithOptions.length < 2 ? (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+                Il faut au moins 2 segmentations avec des options de reponse pour creer un croisement.
+                Verifiez que vos segmentations ont des answer_options sauvegardees.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {segsWithOptions.map(seg => (
+                  <label
+                    key={seg.id}
+                    className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      selectedSegIds.includes(seg.id)
+                        ? 'border-[#7C3AED] bg-[#F5F3FF]'
+                        : 'border-[#E5E7EB] hover:bg-[#F9FAFB]'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedSegIds.includes(seg.id)}
+                      onChange={() => toggleSeg(seg.id)}
+                      className="accent-[#7C3AED]"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-[#111827]">{seg.nom}</p>
+                      <p className="text-xs text-[#6B7280]">
+                        {(seg.answer_options || []).length} options: {(seg.answer_options || []).slice(0, 3).map(o => o.text).join(', ')}
+                        {(seg.answer_options || []).length > 3 && '...'}
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={onClose}>Annuler</Button>
+            <Button
+              variant="primary"
+              onClick={handleGenerate}
+              disabled={selectedSegIds.length < 2 || generating}
+            >
+              {generating ? <Spinner /> : 'Generer combinaisons'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-[#111827]">{combinations.length} combinaisons</p>
+              <p className="text-xs text-[#6B7280]">
+                Total: <span className={Math.abs(totalPct - 100) < 0.1 ? 'text-[#059669] font-semibold' : 'text-[#DC2626] font-semibold'}>
+                  {totalPct.toFixed(1)}%
+                </span>
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={distribuerEquitablement}>
+              Distribuer equitablement
+            </Button>
+          </div>
+
+          <div className="max-h-96 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white">
+                <tr className="border-b border-[#E5E7EB]">
+                  {selectedSegs.map(s => (
+                    <th key={s.id} className="text-left py-2 px-2 text-xs font-medium text-[#6B7280]">{s.nom}</th>
+                  ))}
+                  <th className="text-right py-2 px-2 text-xs font-medium text-[#6B7280] w-24">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {combinations.map((c, i) => (
+                  <tr key={i} className="border-b border-[#F3F4F6]">
+                    {selectedSegs.map(s => (
+                      <td key={s.id} className="py-1.5 px-2 text-[#111827]">{c.combination[s.nom]}</td>
+                    ))}
+                    <td className="py-1.5 px-2 text-right">
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        value={c.pourcentage}
+                        onChange={e => updatePourcentage(i, e.target.value)}
+                        className="w-20 text-right bg-white border border-[#D1D5DB] rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-[#7C3AED]"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex justify-between pt-2">
+            <Button variant="secondary" onClick={() => setStep(1)}>Retour</Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={onClose}>Annuler</Button>
+              <Button variant="primary" onClick={handleSave} disabled={saving}>
+                {saving ? <Spinner /> : 'Creer le quota croise'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }
 
@@ -1847,7 +2212,7 @@ function AddSegmentationModal({ questions, loading, onClose, onSave }) {
     }
     setSaving(true)
     try {
-      await onSave({ ...form, quotas: quotasToCreate })
+      await onSave({ ...form, quotas: quotasToCreate, answer_options: quotas.map(q => ({ text: q.text })) })
     } finally {
       setSaving(false)
     }
@@ -2101,7 +2466,7 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
               <SortableHeader label="Enqueteur" k="nom" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
               <SortableHeader label="Contact" k="email" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
               <SortableHeader label="Enquetes" k="nb_enquetes" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
-              <SortableHeader label="Valides" k="valides" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
+              <SortableHeader label="Completions" k="valides" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
               <SortableHeader label="Progression" k="pct" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
               <SortableHeader label="Connexion" k="connexion" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
               <th className="px-4 py-3"></th>
@@ -2186,6 +2551,10 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
 function EnqueteurDetailView({ enqueteur, onBack }) {
   const [details, setDetails] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [segmentations, setSegmentations] = useState([])
+  const [historique, setHistorique] = useState([])
+  const [activeTab, setActiveTab] = useState('dashboard')
+  const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
 
   useEffect(() => {
     loadDetails()
@@ -2194,8 +2563,14 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
   async function loadDetails() {
     setLoading(true)
     try {
-      const data = await getEnqueteur(enqueteur.id)
+      const [data, segs, hist] = await Promise.all([
+        getEnqueteur(enqueteur.id),
+        getEnqueteurSegmentations(enqueteur.id),
+        getHistoriqueEnqueteur(enqueteur.id)
+      ])
       setDetails(data)
+      setSegmentations(segs || [])
+      setHistorique(hist || [])
     } finally { setLoading(false) }
   }
 
@@ -2204,10 +2579,18 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
   const affectations = details?.affectations || []
   const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
+  const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
+  const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
+
+  const tabs = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'enquetes', label: `Enquetes (${affectations.length})` },
+  ]
 
   return (
     <div className="h-full flex flex-col animate-fadeIn">
+      {/* Header */}
       <div className="p-6 border-b border-[#E5E7EB] bg-white">
         <button onClick={onBack} className="flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#111827] mb-4">
           <BackIcon />
@@ -2235,77 +2618,194 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4 mt-6">
-          <div className="p-4 rounded-xl bg-[#EFF6FF]">
-            <p className="text-2xl font-bold text-[#2563EB]">{affectations.length}</p>
-            <p className="text-[10px] font-medium uppercase text-[#2563EB] opacity-70">Enquetes</p>
-          </div>
-          <div className="p-4 rounded-xl bg-[#ECFDF5]">
-            <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
-            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Valides</p>
-          </div>
-          <div className="p-4 rounded-xl bg-[#F5F3FF]">
-            <p className="text-2xl font-bold text-[#7C3AED]">{totalObjectif}</p>
-            <p className="text-[10px] font-medium uppercase text-[#7C3AED] opacity-70">Objectif</p>
-          </div>
-        </div>
-
-        <div className="mt-4">
-          <ProgressBar value={totalCompletions} max={totalObjectif} size="lg" showLabel />
+        {/* Onglets */}
+        <div className="flex gap-1 mt-6">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-[#111827] text-white'
+                  : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
+      {/* Contenu */}
       <div className="flex-1 overflow-y-auto p-6">
-        <h3 className="text-sm font-semibold text-[#111827] mb-4">Enquetes assignees ({affectations.length})</h3>
-        <div className="space-y-4">
-          {affectations.map(aff => {
-            const enquete = aff.enquetes || {}
-            const valides = aff.completions_valides ?? aff.completions_total ?? 0
-            const pct = Math.round((valides / Math.max(aff.objectif_total, 1)) * 100)
-            return (
-              <Card key={aff.id} className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-mono px-2 py-1 rounded bg-[#F3F4F6] text-[#6B7280]">{enquete.code}</span>
-                      <Badge variant={pct >= 100 ? 'success' : pct >= 50 ? 'info' : 'warning'} size="sm">{pct}%</Badge>
-                    </div>
-                    <h4 className="text-lg font-medium text-[#111827]">{enquete.nom}</h4>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold" style={{ color: getProgressColor(pct) }}>{valides}</p>
-                    <p className="text-xs text-[#9CA3AF]">/ {aff.objectif_total}</p>
-                  </div>
-                </div>
-                <ProgressBar value={valides} max={aff.objectif_total} size="md" />
-
-                {aff.completions_pays?.filter(cp => cp.completions > 0).length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-[#E5E7EB]">
-                    <p className="text-xs font-semibold text-[#6B7280] mb-2">Par pays</p>
-                    <div className="grid grid-cols-3 gap-2">
-                      {aff.completions_pays.filter(cp => cp.completions > 0).sort((a, b) => b.completions - a.completions).slice(0, 6).map((cp, i) => {
-                        const pays = cp.pays || {}
-                        const cpPct = cp.objectif > 0 ? Math.round((cp.completions / cp.objectif) * 100) : 0
-                        return (
-                          <div key={i} className={`p-2 rounded-lg text-xs ${cpPct >= 100 ? 'bg-[#ECFDF5]' : 'bg-[#F9FAFB]'}`}>
-                            <div className="flex justify-between mb-1">
-                              <span className="font-medium text-[#374151]">{pays.nom}</span>
-                              <span style={{ color: getProgressColor(cpPct) }}>{cpPct}%</span>
-                            </div>
-                            <div className="h-1 bg-[#E5E7EB] rounded-full">
-                              <div className="h-full rounded-full bg-[#059669]" style={{ width: `${Math.min(cpPct, 100)}%` }} />
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
+        {activeTab === 'dashboard' ? (
+          <>
+            {/* KPIs */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <Card className="p-4">
+                <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
+                <p className="text-xs text-[#6B7280]">Completions <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
               </Card>
-            )
-          })}
-        </div>
-        {affectations.length === 0 && <div className="text-center py-12 text-[#9CA3AF]">Aucune enquete assignee</div>}
+              <Card className="p-4">
+                <p className="text-2xl font-bold text-[#2563EB]">{totalObjectif}</p>
+                <p className="text-xs text-[#6B7280]">Objectif</p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-2xl font-bold text-[#7C3AED]">{totalClics}</p>
+                <p className="text-xs text-[#6B7280]">Clics</p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-2xl font-bold text-[#D97706]">{conversionRate}%</p>
+                <p className="text-xs text-[#6B7280]">Conversion</p>
+              </Card>
+            </div>
+
+            {/* Progression + Courbe */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+              <Card className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-[#111827]">Progression globale</h3>
+                  <span className="text-2xl font-bold text-[#059669]">{globalPct}%</span>
+                </div>
+                <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden mb-2">
+                  <div className="h-full rounded-full bg-[#059669] transition-all duration-700" style={{ width: `${Math.min(globalPct, 100)}%` }} />
+                </div>
+                <div className="flex justify-between text-xs text-[#6B7280]">
+                  <span>{totalCompletions} completions</span>
+                  <span>Objectif: {totalObjectif}</span>
+                </div>
+              </Card>
+              <Card className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-[#111827]">Evolution (30 jours)</h3>
+                  {historique.length > 0 && <span className="text-xs text-[#6B7280]">{historique.length} jours</span>}
+                </div>
+                <LineChart data={historique} height={100} color="#059669" />
+              </Card>
+            </div>
+
+            {/* Segmentations */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Liste enquetes */}
+              <Card className="p-6">
+                <h3 className="font-semibold text-[#111827] mb-4">Enquetes</h3>
+                <div className="space-y-3">
+                  {affectations.map(aff => {
+                    const enq = aff.enquetes || {}
+                    const comp = aff.completions_valides ?? aff.completions_total ?? 0
+                    const pct = Math.round((comp / Math.max(aff.objectif_total, 1)) * 100)
+                    return (
+                      <div key={aff.id} className="p-3 rounded-lg bg-[#F9FAFB]">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[#E5E7EB] text-[#6B7280]">{enq.code}</span>
+                            <span className="text-sm font-medium text-[#111827]">{enq.nom}</span>
+                          </div>
+                          <span className="text-sm font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
+                        </div>
+                        <ProgressBar value={comp} max={aff.objectif_total} size="sm" />
+                        <div className="flex justify-between mt-1 text-xs text-[#9CA3AF]">
+                          <span>{comp} / {aff.objectif_total}</span>
+                          <span>{aff.clics || 0} clics</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {affectations.length === 0 && <p className="text-center text-[#9CA3AF] py-4">Aucune enquete</p>}
+                </div>
+              </Card>
+
+              {/* Segmentations */}
+              <Card className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-[#111827]">Segmentations</h3>
+                  {segmentations.length > 1 && (
+                    <div className="flex gap-1">
+                      {segmentations.map(seg => (
+                        <button
+                          key={seg.enquete_id}
+                          onClick={() => setSelectedSegEnquete(selectedSegEnquete === seg.enquete_id ? null : seg.enquete_id)}
+                          className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                            selectedSegEnquete === seg.enquete_id || (selectedSegEnquete === null && segmentations[0]?.enquete_id === seg.enquete_id)
+                              ? 'bg-[#059669] text-white'
+                              : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+                          }`}
+                        >
+                          {seg.enquete_code}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                  {segmentations.length > 0 ? (() => {
+                    const activeSeg = segmentations.find(s => s.enquete_id === selectedSegEnquete) || segmentations[0]
+                    if (!activeSeg?.segments?.length) return <p className="text-center text-[#9CA3AF] py-4">Pas de donnees</p>
+                    const maxComp = Math.max(...activeSeg.segments.map(s => s.completions || 0), 1)
+                    return activeSeg.segments.map((seg, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className="text-xs text-[#6B7280] w-24 truncate" title={seg.segment_value}>{seg.segment_value}</span>
+                        <div className="flex-1 h-6 bg-[#F3F4F6] rounded-full overflow-hidden relative">
+                          <div
+                            className="h-full rounded-full bg-[#059669] transition-all duration-500"
+                            style={{ width: `${Math.round(((seg.completions || 0) / maxComp) * 100)}%` }}
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium">
+                            {seg.completions || 0}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  })() : <p className="text-center text-[#9CA3AF] py-4">Aucune segmentation</p>}
+                </div>
+              </Card>
+            </div>
+          </>
+        ) : (
+          /* Onglet Enquetes - liste detaillee */
+          <div className="space-y-4">
+            {affectations.map(aff => {
+              const enquete = aff.enquetes || {}
+              const completions = aff.completions_valides ?? aff.completions_total ?? 0
+              const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
+              const convRate = aff.clics > 0 ? Math.round((completions / aff.clics) * 100) : 0
+              return (
+                <Card key={aff.id} className="p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-mono px-2 py-1 rounded bg-[#F3F4F6] text-[#6B7280]">{enquete.code}</span>
+                        <Badge variant={pct >= 100 ? 'success' : pct >= 50 ? 'info' : 'warning'} size="sm">{pct}%</Badge>
+                      </div>
+                      <h4 className="text-lg font-medium text-[#111827]">{enquete.nom}</h4>
+                      {enquete.cible && <p className="text-sm text-[#6B7280]">{enquete.cible}</p>}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl font-bold" style={{ color: getProgressColor(pct) }}>{completions}</p>
+                      <p className="text-xs text-[#9CA3AF]">/ {aff.objectif_total}</p>
+                    </div>
+                  </div>
+                  <ProgressBar value={completions} max={aff.objectif_total} size="md" />
+                  <div className="grid grid-cols-3 gap-3 mt-4 pt-3 border-t border-[#E5E7EB]">
+                    <div className="text-center">
+                      <p className="text-lg font-bold text-[#059669]">{completions}</p>
+                      <p className="text-[10px] text-[#6B7280]">Completions</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-lg font-bold text-[#7C3AED]">{aff.clics || 0}</p>
+                      <p className="text-[10px] text-[#6B7280]">Clics</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-lg font-bold text-[#D97706]">{convRate}%</p>
+                      <p className="text-[10px] text-[#6B7280]">Conversion</p>
+                    </div>
+                  </div>
+                </Card>
+              )
+            })}
+            {affectations.length === 0 && <div className="text-center py-12 text-[#9CA3AF]">Aucune enquete assignee</div>}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -3056,7 +3556,6 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
   const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
   const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
-  const totalInvalides = affectations.reduce((s, a) => s + ((a.completions_total || 0) - (a.completions_valides ?? a.completions_total ?? 0)), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
   const conversionRate = totalClics > 0 ? Math.min(100, Math.round((totalCompletions / totalClics) * 100)) : 0
 
@@ -3115,7 +3614,6 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
             const enquete = aff.enquetes || {}
             const status = STATUTS.find(s => s.value === aff.statut) || STATUTS[0]
             const completions = aff.completions_valides ?? aff.completions_total ?? 0
-            const invalides = (aff.completions_total || 0) - completions
             const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
             const convRate = aff.clics > 0 ? Math.min(100, Math.round((completions / aff.clics) * 100)) : 0
 
@@ -3142,14 +3640,10 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
                 </div>
 
                 {/* Mini Stats */}
-                <div className="grid grid-cols-4 gap-2 mb-3">
+                <div className="grid grid-cols-3 gap-2 mb-3">
                   <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
                     <p className="text-lg font-bold text-[#059669]">{completions}</p>
-                    <p className="text-[10px] text-[#059669]">Valides</p>
-                  </div>
-                  <div className="p-2 rounded-lg bg-[#FEF2F2] text-center">
-                    <p className="text-lg font-bold text-[#D97706]">{invalides}</p>
-                    <p className="text-[10px] text-[#D97706]">Excedent</p>
+                    <p className="text-[10px] text-[#059669]">Completions</p>
                   </div>
                   <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
                     <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
@@ -3178,10 +3672,6 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
             <Card className="p-4">
               <p className="text-2xl font-bold text-[#2563EB]">{totalObjectif}</p>
               <p className="text-xs text-[#6B7280]">Objectif total</p>
-            </Card>
-            <Card className="p-4">
-              <p className="text-2xl font-bold text-[#D97706]">{totalInvalides}</p>
-              <p className="text-xs text-[#6B7280]">Excedent</p>
             </Card>
             <Card className="p-4">
               <p className="text-2xl font-bold text-[#7C3AED]">{totalClics}</p>
@@ -3268,7 +3758,6 @@ function MyEnqueteDetailView({ affectation, onBack }) {
   const enquete = affectation.enquetes || {}
   const status = STATUTS.find(s => s.value === affectation.statut) || STATUTS[0]
   const completions = affectation.completions_valides ?? affectation.completions_total ?? 0
-  const invalides = (affectation.completions_total || 0) - completions
   const pct = Math.round((completions / Math.max(affectation.objectif_total, 1)) * 100)
   const conversionRate = affectation.clics > 0 ? Math.round((completions / affectation.clics) * 100) : 0
 
@@ -3307,15 +3796,11 @@ function MyEnqueteDetailView({ affectation, onBack }) {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#059669]">{completions}</p>
-          <p className="text-xs text-[#6B7280]">Valides <span className="text-[#9CA3AF]">/ {affectation.objectif_total}</span></p>
+          <p className="text-xs text-[#6B7280]">Completions <span className="text-[#9CA3AF]">/ {affectation.objectif_total}</span></p>
         </Card>
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#2563EB]">{affectation.objectif_total}</p>
           <p className="text-xs text-[#6B7280]">Objectif</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-2xl font-bold text-[#D97706]">{invalides}</p>
-          <p className="text-xs text-[#6B7280]">Excedent</p>
         </Card>
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#7C3AED]">{affectation.clics || 0}</p>

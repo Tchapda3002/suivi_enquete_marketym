@@ -71,7 +71,6 @@ export default function Dashboard() {
   const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
   const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
-  const totalInvalides = affectations.reduce((s, a) => s + ((a.completions_total || 0) - (a.completions_valides ?? a.completions_total ?? 0)), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
   const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
 
@@ -166,7 +165,6 @@ export default function Dashboard() {
             totalCompletions={totalCompletions}
             totalObjectif={totalObjectif}
             totalClics={totalClics}
-            totalInvalides={totalInvalides}
             globalPct={globalPct}
             conversionRate={conversionRate}
             segmentations={segmentations}
@@ -266,7 +264,7 @@ function TabButton({ active, onClick, icon, label, badge }) {
    DASHBOARD TAB
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, totalInvalides, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
+function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
   const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
 
   return (
@@ -280,7 +278,6 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <KPICard label="Completions" value={totalCompletions} subValue={`/ ${totalObjectif}`} color="#059669" />
         <KPICard label="Objectif" value={totalObjectif} subValue="reponses" color="#2563EB" />
-        <KPICard label="Excedent" value={totalInvalides} subValue="reponses" color="#DC2626" />
         <KPICard label="Clics" value={totalClics} subValue="ouvertures" color="#7C3AED" />
         <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
       </div>
@@ -445,7 +442,6 @@ function EnquetesTab({ affectations, onSelect }) {
           const enquete = aff.enquetes || {}
           const status = STATUT_CONFIG[aff.statut] || STATUT_CONFIG.en_cours
           const completions = aff.completions_valides ?? aff.completions_total ?? 0
-          const invalides = (aff.completions_total || 0) - completions
           const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
           const conversionRate = aff.clics > 0 ? Math.round((completions / aff.clics) * 100) : 0
 
@@ -472,14 +468,10 @@ function EnquetesTab({ affectations, onSelect }) {
               </div>
 
               {/* Mini Stats */}
-              <div className="grid grid-cols-4 gap-2 mb-3">
+              <div className="grid grid-cols-3 gap-2 mb-3">
                 <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
                   <p className="text-lg font-bold text-[#059669]">{completions}</p>
-                  <p className="text-[10px] text-[#059669]">Valides</p>
-                </div>
-                <div className="p-2 rounded-lg bg-[#FFF7ED] text-center">
-                  <p className="text-lg font-bold text-[#D97706]">{invalides}</p>
-                  <p className="text-[10px] text-[#D97706]">Excedent</p>
+                  <p className="text-[10px] text-[#059669]">Completions</p>
                 </div>
                 <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
                   <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
@@ -519,7 +511,6 @@ function EnqueteDetail({ affectation, segmentations, onBack }) {
   const enquete = affectation.enquetes || {}
   const status = STATUT_CONFIG[affectation.statut] || STATUT_CONFIG.en_cours
   const completions = affectation.completions_valides ?? affectation.completions_total ?? 0
-  const invalides = (affectation.completions_total || 0) - completions
   const pct = Math.round((completions / Math.max(affectation.objectif_total, 1)) * 100)
   const conversionRate = affectation.clics > 0
     ? Math.round((completions / affectation.clics) * 100)
@@ -556,9 +547,8 @@ function EnqueteDetail({ affectation, segmentations, onBack }) {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <KPICard label="Valides" value={completions} subValue={`/ ${affectation.objectif_total}`} color="#059669" />
+        <KPICard label="Completions" value={completions} subValue={`/ ${affectation.objectif_total}`} color="#059669" />
         <KPICard label="Objectif" value={affectation.objectif_total} subValue="reponses" color="#2563EB" />
-        <KPICard label="Excedent" value={invalides} subValue="reponses" color="#DC2626" />
         <KPICard label="Clics" value={affectation.clics || 0} subValue="ouvertures" color="#7C3AED" />
         <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
       </div>
@@ -699,8 +689,6 @@ function ProfilTab({ enqueteur, onUpdate }) {
   const affectations = enqueteur.affectations || []
   const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
-  const totalInvalides = affectations.reduce((s, a) => s + ((a.completions_total || 0) - (a.completions_valides ?? a.completions_total ?? 0)), 0)
-
   const handleEditClick = async () => {
     setError('')
     setLoading(true)
@@ -913,10 +901,6 @@ function ProfilTab({ enqueteur, onUpdate }) {
           <div className="p-4 rounded-xl bg-[#ECFDF5] text-center">
             <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
             <p className="text-xs text-[#059669]">Completions</p>
-          </div>
-          <div className="p-4 rounded-xl bg-[#FFF7ED] text-center">
-            <p className="text-2xl font-bold text-[#D97706]">{totalInvalides}</p>
-            <p className="text-xs text-[#D97706]">Excedent</p>
           </div>
           <div className="p-4 rounded-xl bg-[#F5F3FF] text-center">
             <p className="text-2xl font-bold text-[#7C3AED]">{totalObjectif}</p>

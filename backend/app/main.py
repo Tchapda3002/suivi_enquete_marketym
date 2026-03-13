@@ -4,7 +4,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import httpx
-import unicodedata
+import json
 from datetime import datetime
 from supabase import create_client, Client
 
@@ -110,6 +110,7 @@ class CreateSegmentation(BaseModel):
     question_id: str              # ID de la question QuestionPro
     question_text: Optional[str] = None
     nom: str                      # Ex: "Pays", "Secteur", "Tranche d'age"
+    answer_options: Optional[List[Dict[str, Any]]] = None  # Options de reponse QP
 
 class UpdateSegmentation(BaseModel):
     question_id: Optional[str] = None
@@ -137,64 +138,14 @@ class BulkQuotas(BaseModel):
     quotas: List[Dict[str, Any]]  # [{segment_value: str, pourcentage: float}]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NORMALISATION DES PAYS
+# QUOTAS CROISES (cross-tabulation)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def normalize_country_name(name: str) -> str:
-    """Normaliser le nom du pays (supprimer accents, apostrophes, espaces)"""
-    # Supprimer les accents
-    normalized = unicodedata.normalize('NFD', name)
-    normalized = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
-    # Nettoyer apostrophes et espaces multiples
-    normalized = normalized.replace("'", " ").replace("d ", "d").strip().lower()
-    # Supprimer espaces multiples
-    normalized = ' '.join(normalized.split())
-    return normalized
-
-# Mapping QuestionPro -> Base de donnees (normalise)
-PAYS_MAPPING = {
-    "benin": "benin",
-    "senegal": "senegal",
-    "cote divoire": "cote divoire",
-    "cotedivoire": "cote divoire",
-    "mali": "mali",
-    "burkina faso": "burkina faso",
-    "niger": "niger",
-    "togo": "togo",
-    "guinee-bissau": "guinee-bissau",
-    "guinee bissau": "guinee-bissau",
-    "cameroun": "cameroun",
-    "gabon": "gabon",
-    "congo": "congo",
-    "congo-brazzaville": "congo",  # Alias
-    "congo brazzaville": "congo",  # Alias
-    "tchad": "tchad",
-    "rca": "rca",
-    "centrafrique": "rca",
-    "guinee equatoriale": "guinee equatoriale",
-    "mauritanie": "mauritanie",
-}
-
-def match_country_to_db(country_name: str, db_pays_map: dict) -> str:
-    """Trouver le pays_id correspondant dans la base de donnees"""
-    normalized = normalize_country_name(country_name)
-
-    # 1. Chercher dans le mapping explicite
-    if normalized in PAYS_MAPPING:
-        db_name = PAYS_MAPPING[normalized]
-        if db_name in db_pays_map:
-            return db_pays_map[db_name]
-
-    # 2. Chercher par correspondance normalisee dans la DB
-    for db_nom, db_id in db_pays_map.items():
-        db_normalized = normalize_country_name(db_nom)
-        if normalized == db_normalized:
-            return db_id
-        # Correspondance partielle
-        if normalized in db_normalized or db_normalized in normalized:
-            return db_id
-
-    return None
+class CreateQuotaConfig(BaseModel):
+    enquete_id: str
+    nom: str                                  # Ex: "Pays x Secteur"
+    segmentation_ids: List[str]               # IDs des segmentations a croiser
+    quotas: List[Dict[str, Any]]              # [{combination: {}, pourcentage: float}]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FONCTIONS QUESTIONPRO
@@ -265,7 +216,7 @@ async def fetch_survey_questions(survey_id: str) -> list:
 
         return result
 
-async def fetch_survey_responses(survey_id: str, page: int = 1, per_page: int = 100) -> list:
+async def fetch_survey_responses(survey_id: str, page: int = 1, per_page: int = 1000) -> list:
     """Recuperer les reponses d'un survey QuestionPro"""
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(
@@ -278,24 +229,20 @@ async def fetch_survey_responses(survey_id: str, page: int = 1, per_page: int = 
         data = response.json()
         return data.get("response", [])
 
-def extract_country_from_response(response: dict) -> str:
-    """Extraire le pays d'une reponse QuestionPro"""
-    for question in response.get("responseSet", []):
-        question_text = question.get("questionText", "").lower()
-        if "pays" in question_text:
-            answers = question.get("answerValues", [])
-            if answers:
-                return answers[0].get("answerText", "Autre")
-    return "Autre"
-
-def extract_segment_value_from_response(response: dict, question_id: str) -> str:
-    """Extraire la valeur d'un segment d'une reponse QuestionPro"""
+def extract_segment_value_from_response(response: dict, question_id: str, answer_id_map: dict = None) -> str:
+    """Extraire la valeur d'un segment d'une reponse QuestionPro.
+    answer_id_map: mapping answerID -> texte modalite (pour corriger les textes corrompus par QuestionPro)
+    """
     for question in response.get("responseSet", []):
         if str(question.get("questionID", "")) == str(question_id):
             answers = question.get("answerValues", [])
             if answers:
+                answer_id = answers[0].get("answerID")
+                # Utiliser le texte de la modalite si disponible (plus fiable que answerText)
+                if answer_id_map and answer_id in answer_id_map:
+                    return answer_id_map[answer_id]
                 return answers[0].get("answerText", "Autre")
-    return "Autre"
+    return None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TRACKING CLICS - Endpoint de redirection
@@ -527,55 +474,8 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
         aff["quotas"] = quotas_indiv_map.get(aff_id) or quotas_glob_map.get(enquete_id, [])
         aff["completions_segments"] = segments_map.get(aff_id, [])
 
-        # Calculer les completions valides pour cet enqueteur
-        # Les completions valides = min(completions_enqueteur, objectif_segment calcule depuis pourcentage)
-        enqueteur_segments = segments_map.get(aff_id, [])
-        # Utiliser d'abord les quotas individuels, sinon les quotas globaux de l'enquete
-        active_quotas = quotas_indiv_map.get(aff_id) or quotas_glob_map.get(enquete_id, [])
-        objectif_total = aff.get("objectif_total", 0) or 0
-
-        # Creer un mapping segment_value normalise -> objectif calcule depuis pourcentage
-        quota_info = {}
-        for q in active_quotas:
-            seg_val = q.get("segment_value", "")
-            if seg_val:
-                seg_val_norm = normalize_country_name(seg_val)
-                pourcentage = q.get("pourcentage", 0) or 0
-                # Objectif individuel = floor(objectif_total * pourcentage / 100)
-                objectif_individuel = int(objectif_total * pourcentage / 100)
-                quota_info[seg_val_norm] = objectif_individuel
-
-        # Calculer completions valides par segment
-        # Valides = min(completions_enqueteur_segment, objectif_segment)
-        completions_valides = 0
-        completions_total = aff.get("completions_total", 0) or 0
-
-        # Agreger les completions par segment normalise (car peut y avoir Senegal + Sénégal)
-        segments_agreg = {}
-        for seg in enqueteur_segments:
-            seg_val = seg.get("segment_value", "")
-            seg_comp = seg.get("completions", 0) or 0
-            seg_val_norm = normalize_country_name(seg_val)
-            seg_val_norm = PAYS_MAPPING.get(seg_val_norm, seg_val_norm)
-            segments_agreg[seg_val_norm] = segments_agreg.get(seg_val_norm, 0) + seg_comp
-
-        if quota_info:
-            # Calculer le ratio si les segments depassent completions_total (doublons dans DB)
-            sum_segments = sum(segments_agreg.values())
-            ratio = completions_total / sum_segments if sum_segments > completions_total else 1.0
-
-            for seg_val_norm, seg_comp in segments_agreg.items():
-                seg_comp_adjusted = int(seg_comp * ratio) if ratio < 1 else seg_comp
-                if seg_val_norm in quota_info:
-                    objectif = quota_info[seg_val_norm]
-                    completions_valides += min(seg_comp_adjusted, objectif)
-                # Segment non trouve = invalide, on n'ajoute rien
-        else:
-            # Pas de quotas definis = toutes les completions sont valides
-            completions_valides = completions_total
-
-        # S'assurer que valides <= completions_total
-        aff["completions_valides"] = min(completions_valides, completions_total)
+        # Completions = completions_total (plus de calcul valides/invalides)
+        aff["completions_valides"] = aff.get("completions_total", 0) or 0
 
         # S'assurer que lien_direct et lien_questionnaire sont corrects
         if not aff.get("lien_direct"):
@@ -661,8 +561,7 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
         if enquete_id:
             if enquete_id not in enquete_quotas:
                 enquete_quotas[enquete_id] = {}
-            seg_norm = normalize_country_name(q.get("segment_value", ""))
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            seg_norm = q.get("segment_value", "")
             enquete_quotas[enquete_id][seg_norm] = q.get("pourcentage", 0) or 0
 
     # Charger completions_segments pour toutes les affectations
@@ -677,36 +576,8 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
             aff_segments[aid] = []
         aff_segments[aid].append(s)
 
-    # Calculer total_valides = somme des valides de chaque affectation
-    total_valides = 0
-    for aff in affectations.data:
-        enquete_id = aff.get("enquete_id")
-        quotas_pct = enquete_quotas.get(enquete_id, {})
-        objectif_total = aff.get("objectif_total", 0) or 0
-        completions_total_aff = aff.get("completions_total", 0) or 0
-        segments = aff_segments.get(aff["id"], [])
-
-        # Agreger par segment normalise
-        segments_agreg = {}
-        for seg in segments:
-            seg_val = seg.get("segment_value", "")
-            seg_comp = seg.get("completions", 0) or 0
-            seg_norm = normalize_country_name(seg_val)
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
-
-        if quotas_pct:
-            aff_valides = 0
-            for seg_norm, seg_comp in segments_agreg.items():
-                if seg_norm in quotas_pct:
-                    objectif_seg = int(objectif_total * quotas_pct[seg_norm] / 100)
-                    aff_valides += min(seg_comp, objectif_seg)
-            total_valides += min(aff_valides, completions_total_aff)
-        else:
-            total_valides += completions_total_aff
-
-    # Invalides = tout ce qui n'est pas valide
-    total_invalides = total_completions - total_valides
+    # Completions = total_completions (plus de calcul valides/invalides)
+    total_valides = total_completions
 
     # Compter enqueteurs sans ADMIN (retro-compatible si is_admin n'existe pas)
     nb_enqueteurs = len([e for e in enqueteurs.data if not e.get("is_admin", False)])
@@ -729,8 +600,8 @@ def get_dashboard(admin: dict = Depends(require_admin), sb: Client = Depends(get
         "total_clics": total_clics,
         "total_completions": total_completions,
         "total_valides": total_valides,
-        "total_invalides": total_invalides,
-        "taux_completion": round((total_valides / total_objectif * 100), 1) if total_objectif > 0 else 0
+        "total_invalides": 0,
+        "taux_completion": round((total_completions / total_objectif * 100), 1) if total_objectif > 0 else 0
     }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -754,8 +625,7 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
         if enquete_id:
             if enquete_id not in enquete_quotas:
                 enquete_quotas[enquete_id] = {}
-            seg_norm = normalize_country_name(q.get("segment_value", ""))
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            seg_norm = q.get("segment_value", "")
             enquete_quotas[enquete_id][seg_norm] = q.get("pourcentage", 0) or 0
 
     # Charger toutes les affectations
@@ -791,29 +661,8 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
         total_completions = sum(a["completions_total"] or 0 for a in affectations)
         total_clics = sum(a["clics"] or 0 for a in affectations)
 
-        # Calculer total_valides = somme des valides de chaque affectation (quotas individuels)
-        total_valides = 0
-        for aff in affectations:
-            segments = aff_segments.get(aff["id"], [])
-            # Agreger par segment normalise
-            segments_agreg = {}
-            for seg in segments:
-                seg_val = seg.get("segment_value", "")
-                seg_comp = seg.get("completions", 0) or 0
-                seg_norm = normalize_country_name(seg_val)
-                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-                segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
-
-            objectif_total_aff = aff.get("objectif_total") or 0
-            if quotas:
-                aff_valides = 0
-                for seg_norm, seg_comp in segments_agreg.items():
-                    if seg_norm in quotas:
-                        objectif_seg = int(objectif_total_aff * quotas[seg_norm] / 100)
-                        aff_valides += min(seg_comp, objectif_seg)
-                total_valides += min(aff_valides, aff.get("completions_total") or 0)
-            else:
-                total_valides += aff.get("completions_total") or 0
+        # Valides = completions totales (excedents calcules au niveau global dans la v2)
+        total_valides = total_completions
 
         result.append({
             **enq,
@@ -829,7 +678,7 @@ def list_enquetes(admin: dict = Depends(require_admin), sb: Client = Depends(get
 
 @app.get("/admin/enquetes/{id}")
 def get_enquete(id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Detail d'une enquete avec completions_valides par affectation"""
+    """Detail d'une enquete avec completions par affectation"""
     res = sb.table("enquetes").select("*").eq("id", id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Enquete introuvable")
@@ -839,64 +688,13 @@ def get_enquete(id: str, admin: dict = Depends(require_admin), sb: Client = Depe
         .eq("enquete_id", id)\
         .execute()
 
-    # Recuperer les segmentations et quotas de cette enquete
-    segmentations = sb.table("segmentations").select("id").eq("enquete_id", id).execute()
-    seg_ids = [s["id"] for s in segmentations.data]
-
-    # Construire le mapping des quotas normalises
-    quota_info = {}
-    if seg_ids:
-        quotas_raw = sb.table("quotas")\
-            .select("segment_value, pourcentage")\
-            .in_("segmentation_id", seg_ids)\
-            .is_("affectation_id", "null")\
-            .execute()
-        for q in quotas_raw.data:
-            seg_norm = normalize_country_name(q.get("segment_value", ""))
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            quota_info[seg_norm] = q.get("pourcentage", 0) or 0
-
-    # Recuperer les completions_segments pour toutes les affectations
-    aff_ids = [a["id"] for a in affectations.data]
-    all_segments = {}
-    if aff_ids:
-        segments_data = sb.table("completions_segments")\
-            .select("affectation_id, segment_value, completions")\
-            .in_("affectation_id", aff_ids)\
-            .execute()
-        for s in segments_data.data:
-            aid = s["affectation_id"]
-            if aid not in all_segments:
-                all_segments[aid] = []
-            all_segments[aid].append(s)
-
-    # Calculer completions_valides pour chaque affectation (quotas INDIVIDUELS)
+    # Completions = completions_total (plus de calcul valides/invalides)
     for aff in affectations.data:
-        aff_segments = all_segments.get(aff["id"], [])
-        completions_valides = 0
-
-        # Agreger les completions par segment normalise
-        segments_agreg = {}
-        for seg in aff_segments:
-            seg_val = seg.get("segment_value", "")
-            seg_comp = seg.get("completions", 0) or 0
-            seg_norm = normalize_country_name(seg_val)
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
-
-        objectif_total_aff = aff.get("objectif_total") or 0
-        if quota_info:
-            for seg_norm, seg_comp in segments_agreg.items():
-                if seg_norm in quota_info:
-                    objectif_seg = int(objectif_total_aff * quota_info[seg_norm] / 100)
-                    completions_valides += min(seg_comp, objectif_seg)
-            completions_valides = min(completions_valides, aff.get("completions_total") or 0)
-        else:
-            completions_valides = aff.get("completions_total") or 0
-
-        aff["completions_valides"] = completions_valides
+        aff["completions_valides"] = aff.get("completions_total", 0) or 0
 
     # Recuperer les quotas globaux pour l'affichage
+    segmentations = sb.table("segmentations").select("id").eq("enquete_id", id).execute()
+    seg_ids = [s["id"] for s in segmentations.data]
     quotas_data = []
     if seg_ids:
         quotas_result = sb.table("quotas")\
@@ -1015,8 +813,7 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
         if enquete_id:
             if enquete_id not in enquete_quotas:
                 enquete_quotas[enquete_id] = {}
-            seg_norm = normalize_country_name(q.get("segment_value", ""))
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            seg_norm = q.get("segment_value", "")
             enquete_quotas[enquete_id][seg_norm] = q.get("pourcentage", 0) or 0
 
     # Creer mapping affectation_id -> completions_segments
@@ -1044,32 +841,8 @@ def list_enqueteurs(admin: dict = Depends(require_admin), sb: Client = Depends(g
         total_completions = sum(a["completions_total"] or 0 for a in enq_affectations)
         total_clics = sum(a["clics"] or 0 for a in enq_affectations)
 
-        # Calculer completions valides pour cet enqueteur (quotas INDIVIDUELS)
-        total_valides = 0
-        for aff in enq_affectations:
-            enquete_id = aff.get("enquete_id")
-            quotas = enquete_quotas.get(enquete_id, {})
-            segments = aff_segments.get(aff["id"], [])
-
-            # Agreger les completions par segment normalise
-            segments_agreg = {}
-            for seg in segments:
-                seg_val = seg.get("segment_value", "")
-                seg_comp = seg.get("completions", 0) or 0
-                seg_norm = normalize_country_name(seg_val)
-                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-                segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
-
-            objectif_total_aff = aff.get("objectif_total") or 0
-            if quotas:
-                aff_valides = 0
-                for seg_norm, seg_comp in segments_agreg.items():
-                    if seg_norm in quotas:
-                        objectif_seg = int(objectif_total_aff * quotas[seg_norm] / 100)
-                        aff_valides += min(seg_comp, objectif_seg)
-                total_valides += min(aff_valides, aff.get("completions_total") or 0)
-            else:
-                total_valides += aff.get("completions_total") or 0
+        # Completions = total_completions (plus de calcul valides/invalides)
+        total_valides = total_completions
 
         result.append({
             **enq,
@@ -1197,49 +970,12 @@ def list_affectations_by_enquete(enquete_id: str, admin: dict = Depends(require_
             .is_("affectation_id", "null")\
             .execute()
         for q in quotas_raw.data:
-            seg_norm = normalize_country_name(q.get("segment_value", ""))
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            seg_norm = q.get("segment_value", "")
             quota_info[seg_norm] = q.get("pourcentage", 0) or 0
 
-    # Recuperer completions_segments pour toutes les affectations
-    aff_ids = [a["id"] for a in affectations.data]
-    all_segments = {}
-    if aff_ids:
-        segments_data = sb.table("completions_segments")\
-            .select("affectation_id, segment_value, completions")\
-            .in_("affectation_id", aff_ids)\
-            .execute()
-        for s in segments_data.data:
-            aid = s["affectation_id"]
-            if aid not in all_segments:
-                all_segments[aid] = []
-            all_segments[aid].append(s)
-
-    # Calculer completions_valides pour chaque affectation
+    # Completions = completions_total (plus de calcul valides/invalides)
     for aff in affectations.data:
-        aff_segments = all_segments.get(aff["id"], [])
-        objectif_total = aff.get("objectif_total", 0) or 0
-        completions_total = aff.get("completions_total", 0) or 0
-        completions_valides = 0
-
-        # Agreger les completions par segment normalise
-        segments_agreg = {}
-        for seg in aff_segments:
-            seg_val = seg.get("segment_value", "")
-            seg_comp = seg.get("completions", 0) or 0
-            seg_norm = normalize_country_name(seg_val)
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-            segments_agreg[seg_norm] = segments_agreg.get(seg_norm, 0) + seg_comp
-
-        if quota_info:
-            for seg_norm, seg_comp in segments_agreg.items():
-                if seg_norm in quota_info:
-                    objectif_seg = int(objectif_total * quota_info[seg_norm] / 100)
-                    completions_valides += min(seg_comp, objectif_seg)
-        else:
-            completions_valides = completions_total
-
-        aff["completions_valides"] = min(completions_valides, completions_total)
+        aff["completions_valides"] = aff.get("completions_total", 0) or 0
 
     return affectations.data
 
@@ -1429,7 +1165,10 @@ def get_segmentations_by_enquete(enquete_id: str, admin: dict = Depends(require_
 @app.post("/admin/segmentations")
 def create_segmentation(data: CreateSegmentation, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """Creer une segmentation pour une enquete"""
-    res = sb.table("segmentations").insert(data.dict()).execute()
+    payload = data.dict()
+    if payload.get("answer_options") is None:
+        payload["answer_options"] = []
+    res = sb.table("segmentations").insert(payload).execute()
     if not res.data:
         raise HTTPException(status_code=400, detail="Erreur creation segmentation")
     return res.data[0]
@@ -1475,8 +1214,7 @@ def get_quotas_by_segmentation(segmentation_id: str, admin: dict = Depends(requi
             .in_("affectation_id", aff_ids)\
             .execute()
         for s in cs.data:
-            seg_norm = normalize_country_name(s.get("segment_value", ""))
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            seg_norm = s.get("segment_value", "")
             completions_par_segment[seg_norm] = completions_par_segment.get(seg_norm, 0) + (s.get("completions") or 0)
 
     # Quotas globaux
@@ -1494,8 +1232,7 @@ def get_quotas_by_segmentation(segmentation_id: str, admin: dict = Depends(requi
         seg_val = q.get("segment_value", "")
         pourcentage = q.get("pourcentage") or 0
         objectif = int(objectif_total_enquete * pourcentage / 100)
-        seg_norm = normalize_country_name(seg_val)
-        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+        seg_norm = seg_val
         valides_brut = completions_par_segment.get(seg_norm, 0)
         valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
         result.append({
@@ -1606,6 +1343,166 @@ def delete_quota(id: str, admin: dict = Depends(require_admin), sb: Client = Dep
     return {"ok": True}
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ROUTES ADMIN - QUOTAS CROISES
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/quota-configs")
+def create_quota_config(data: CreateQuotaConfig, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Creer une configuration de quotas croises avec ses combinaisons"""
+    # 1. Creer la config
+    config_res = sb.table("quota_configs").insert({
+        "enquete_id": data.enquete_id,
+        "nom": data.nom
+    }).execute()
+    if not config_res.data:
+        raise HTTPException(status_code=400, detail="Erreur creation quota config")
+    config = config_res.data[0]
+    config_id = config["id"]
+
+    # 2. Lier les segmentations
+    for i, seg_id in enumerate(data.segmentation_ids):
+        sb.table("quota_config_questions").insert({
+            "quota_config_id": config_id,
+            "segmentation_id": seg_id,
+            "position": i
+        }).execute()
+
+    # 3. Creer les quotas pour chaque combinaison
+    for q in data.quotas:
+        combination = q.get("combination", {})
+        pourcentage = float(q.get("pourcentage", 0))
+        # Trouver la premiere segmentation pour lier le quota
+        first_seg_id = data.segmentation_ids[0] if data.segmentation_ids else None
+        sb.table("quotas").insert({
+            "segmentation_id": first_seg_id,
+            "quota_config_id": config_id,
+            "segment_value": " x ".join(str(v) for v in combination.values()),
+            "combination": combination,
+            "pourcentage": pourcentage
+        }).execute()
+
+    return config
+
+@app.get("/admin/quota-configs/by-enquete/{enquete_id}")
+def get_quota_configs_by_enquete(enquete_id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Lister les configs de quotas croises d'une enquete avec completions"""
+    configs = sb.table("quota_configs")\
+        .select("*")\
+        .eq("enquete_id", enquete_id)\
+        .execute()
+
+    if not configs.data:
+        return []
+
+    # Recuperer les affectations de l'enquete
+    affectations = sb.table("affectations")\
+        .select("id, objectif_total")\
+        .eq("enquete_id", enquete_id)\
+        .execute()
+    aff_ids = [a["id"] for a in affectations.data]
+    objectif_total_enquete = sum(a.get("objectif_total") or 0 for a in affectations.data)
+
+    result = []
+    for config in configs.data:
+        config_id = config["id"]
+
+        # Questions liees
+        questions = sb.table("quota_config_questions")\
+            .select("*, segmentations(id, nom, question_id)")\
+            .eq("quota_config_id", config_id)\
+            .order("position")\
+            .execute()
+
+        # Quotas (combinaisons avec pourcentages)
+        quotas = sb.table("quotas")\
+            .select("id, segment_value, combination, pourcentage")\
+            .eq("quota_config_id", config_id)\
+            .execute()
+
+        # Completions par combinaison (agrege toutes les affectations)
+        completions_map = {}
+        if aff_ids:
+            combs = sb.table("completions_combinations")\
+                .select("combination, completions")\
+                .eq("quota_config_id", config_id)\
+                .in_("affectation_id", aff_ids)\
+                .execute()
+            for c in combs.data:
+                key = str(c["combination"])
+                completions_map[key] = completions_map.get(key, 0) + (c["completions"] or 0)
+
+        # Enrichir les quotas avec completions
+        quotas_enriched = []
+        for q in quotas.data:
+            comb = q.get("combination", {})
+            key = str(comb)
+            pct = q.get("pourcentage") or 0
+            objectif = int(objectif_total_enquete * pct / 100)
+            completions = completions_map.get(key, 0)
+            quotas_enriched.append({
+                **q,
+                "objectif": objectif,
+                "completions": completions,
+                "progression": round(completions / objectif * 100, 1) if objectif > 0 else 0
+            })
+
+        result.append({
+            **config,
+            "questions": questions.data,
+            "quotas": quotas_enriched,
+            "objectif_total": objectif_total_enquete
+        })
+
+    return result
+
+@app.delete("/admin/quota-configs/{id}")
+def delete_quota_config(id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Supprimer une config de quotas croises (cascade sur questions, quotas, completions)"""
+    sb.table("quota_configs").delete().eq("id", id).execute()
+    return {"ok": True}
+
+@app.post("/admin/quota-configs/{config_id}/generate-combinations")
+def generate_combinations(config_id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Generer le produit cartesien des answer_options des segmentations liees"""
+    from itertools import product as itertools_product
+
+    # Recuperer les questions liees a cette config
+    questions = sb.table("quota_config_questions")\
+        .select("segmentation_id, position, segmentations(id, nom, answer_options)")\
+        .eq("quota_config_id", config_id)\
+        .order("position")\
+        .execute()
+
+    if not questions.data:
+        return {"combinations": []}
+
+    # Construire les listes d'options par segmentation
+    axes = []
+    for q in questions.data:
+        seg = q.get("segmentations", {})
+        nom = seg.get("nom", "")
+        options = seg.get("answer_options") or []
+        # Chaque option est un dict avec au minimum "text" ou "value"
+        values = []
+        for opt in options:
+            val = opt.get("text") or opt.get("value") or opt.get("label") or str(opt)
+            values.append(val)
+        axes.append({"nom": nom, "values": values})
+
+    # Produit cartesien
+    if not axes or any(len(a["values"]) == 0 for a in axes):
+        return {"combinations": []}
+
+    noms = [a["nom"] for a in axes]
+    all_values = [a["values"] for a in axes]
+    combinations = []
+    for combo in itertools_product(*all_values):
+        combination = dict(zip(noms, combo))
+        combinations.append(combination)
+
+    return {"combinations": combinations, "axes": axes}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ROUTES ADMIN - QUESTIONPRO QUESTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1632,7 +1529,8 @@ async def sync_all(admin: dict = Depends(require_admin), sb: Client = Depends(ge
     """Synchroniser toutes les affectations avec QuestionPro (en parallele)"""
     import asyncio
 
-    affectations = sb.table("affectations").select("id, survey_id").execute()
+    # Ne synchroniser que les affectations des enquetes en cours
+    affectations = sb.table("affectations").select("id, survey_id, enquete_id, enquetes!inner(statut)").eq("enquetes.statut", "en_cours").execute()
 
     # Executer les syncs en parallele (max 5 a la fois pour eviter de surcharger l'API)
     semaphore = asyncio.Semaphore(5)
@@ -1723,57 +1621,82 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
     if not stats:
         stats = {"completions": 0, "clics": 0}
 
-    # 5. Compter par pays/segment pour CET ENQUETEUR
-    pays_counts = {}
-    segment_counts = {}
+    # 5. Compter par segment pour CET ENQUETEUR
+    # Charger les segmentations depuis la table segmentations (nouveau systeme)
+    segmentations_list = []
+    if enquete_id:
+        seg_res = sb.table("segmentations").select("id, question_id, question_text, nom").eq("enquete_id", enquete_id).execute()
+        segmentations_list = seg_res.data if seg_res.data else []
 
-    for resp in enqueteur_responses:
-        # Compter par pays (legacy)
-        country = extract_country_from_response(resp)
-        pays_counts[country] = pays_counts.get(country, 0) + 1
+    # Fallback sur l'ancien champ segmentation_question_id si pas de segmentations
+    if not segmentations_list and segmentation_question_id:
+        segmentations_list = [{"id": None, "question_id": segmentation_question_id, "nom": "Segment"}]
 
-        # Compter par segment personnalise si defini
-        if segmentation_question_id:
-            segment = extract_segment_value_from_response(resp, segmentation_question_id)
-            segment_counts[segment] = segment_counts.get(segment, 0) + 1
+    # Charger les questions du survey source des reponses pour :
+    # 1. Trouver le bon question_id (ancien systeme : match par texte)
+    # 2. Mapper answerID -> texte modalite (corrige les textes corrompus par QuestionPro)
+    answer_id_maps = {}  # qid -> {answerID: texte_modalite}
+    target_questions = []
+    target_sid = str(survey_id_affectation if is_ancien_systeme else (survey_id_enquete or survey_id_affectation))
+    if segmentations_list:
+        try:
+            target_questions = await fetch_survey_questions(target_sid)
+            for q in target_questions:
+                aid_map = {}
+                for a in q.get("answers", []):
+                    aid = a.get("id")
+                    if aid:
+                        try:
+                            aid_map[int(aid)] = a.get("text", "")
+                        except (ValueError, TypeError):
+                            pass
+                answer_id_maps[q["id"]] = aid_map
+        except Exception as e:
+            print(f"[sync] Erreur fetch questions survey {target_sid}: {e}")
 
-    # 4. Mettre a jour completions_pays (legacy)
-    pays_list = sb.table("pays").select("id, nom").execute()
-    pays_map = {p["nom"]: p["id"] for p in pays_list.data}
+    # Ancien systeme : trouver le bon question_id par matching de texte
+    if is_ancien_systeme and segmentations_list and target_questions:
+        indiv_qid_by_text = {}
+        for q in target_questions:
+            indiv_qid_by_text[q["text"].strip().lower()] = q["id"]
+        for seg in segmentations_list:
+            seg_text = (seg.get("question_text") or seg.get("nom") or "").strip().lower()
+            if seg_text in indiv_qid_by_text:
+                seg["_resolved_qid"] = indiv_qid_by_text[seg_text]
+            else:
+                # Match souple par mot-cle du nom de la segmentation
+                seg_nom = (seg.get("nom") or "").strip().lower()
+                keywords = [w for w in seg_nom.split() if len(w) > 2]
+                if not keywords and seg_text:
+                    keywords = [w for w in seg_text.split() if len(w) > 3]
+                for q in target_questions:
+                    q_text = q["text"].strip().lower()
+                    if any(kw in q_text for kw in keywords):
+                        seg["_resolved_qid"] = q["id"]
+                        break
 
-    pays_matched = {}
-    pays_non_matches = []
+    # Compter les completions par segmentation et par valeur
+    segment_counts_by_question = {}
+    for seg in segmentations_list:
+        qid = seg.get("_resolved_qid", seg["question_id"])
+        aid_map = answer_id_maps.get(str(qid), {})
+        segment_counts_by_question[qid] = {}
+        for resp in enqueteur_responses:
+            value = extract_segment_value_from_response(resp, qid, aid_map)
+            if value:
+                segment_counts_by_question[qid][value] = segment_counts_by_question[qid].get(value, 0) + 1
 
-    for pays_nom, count in pays_counts.items():
-        # Utiliser la nouvelle fonction de matching
-        pays_id = match_country_to_db(pays_nom, pays_map)
-
-        if pays_id:
-            pays_matched[pays_nom] = count
-            sb.table("completions_pays").update({
-                "completions": count
-            }).eq("affectation_id", affectation_id).eq("pays_id", pays_id).execute()
-        else:
-            pays_non_matches.append(pays_nom)
-
-    # 5. Mettre a jour completions_segments avec noms NORMALISES
-    # D'abord supprimer les anciennes entrees pour eviter les doublons
+    # 5b. Mettre a jour completions_segments (match exact, pas de normalisation)
     sb.table("completions_segments").delete().eq("affectation_id", affectation_id).execute()
 
-    # Agreger segment_counts par nom normalise
+    # Agreger toutes les segmentations dans completions_segments
+    # Note: completions_segments n'a pas de segmentation_id, donc on insere toutes les valeurs
     segments_normalized = {}
-    for segment_value, count in segment_counts.items():
-        seg_norm = normalize_country_name(segment_value)
-        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-        segments_normalized[seg_norm] = segments_normalized.get(seg_norm, 0) + count
+    for qid, counts in segment_counts_by_question.items():
+        for segment_value, count in counts.items():
+            segments_normalized[segment_value] = segments_normalized.get(segment_value, 0) + count
 
-    # Agreger pays_matched par nom normalise
-    for pays_nom, count in pays_matched.items():
-        seg_norm = normalize_country_name(pays_nom)
-        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
-        segments_normalized[seg_norm] = segments_normalized.get(seg_norm, 0) + count
-
-    # Inserer les segments normalises
+    # Inserer les segments
     for seg_norm, count in segments_normalized.items():
         sb.table("completions_segments").insert({
             "affectation_id": affectation_id,
@@ -1781,17 +1704,13 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
             "completions": count
         }).execute()
 
-    # 7. Calculer les completions valides (attribuees a un pays) vs invalides
-    total_attribuees = sum(pays_matched.values())
-    completions_enqueteur = len(enqueteur_responses)  # Nombre de completions de cet enqueteur
-    total_non_attribuees = completions_enqueteur - total_attribuees
+    completions_enqueteur = len(enqueteur_responses)
 
-    # 8. Mettre a jour l'affectation avec completions_total, clics et invalid_total
-    # Clics = nombre d'IPs uniques (deduplication)
+    # 7. Mettre a jour l'affectation avec completions_total et clics
     sb.table("affectations").update({
         "completions_total": completions_enqueteur,
-        "clics": clics_count,  # IPs uniques = vrais clics sans doublons
-        "invalid_total": max(0, total_non_attribuees),
+        "clics": clics_count,
+        "invalid_total": 0,
         "derniere_synchro": datetime.utcnow().isoformat()
     }).eq("id", affectation_id).execute()
 
@@ -1812,8 +1731,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
             quota_indiv_mapping = {}
             for q in quotas_indiv.data:
                 q_name = q.get("segment_value", "")
-                q_norm = normalize_country_name(q_name)
-                q_norm = PAYS_MAPPING.get(q_norm, q_norm)
+                q_norm = q_name
                 quota_indiv_mapping[q_norm] = q["id"]
 
             # Mettre a jour chaque quota individuel avec les completions de cet enqueteur
@@ -1844,8 +1762,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
             quota_mapping = {}
             for q in all_quotas.data:
                 q_name = q.get("segment_value", "")
-                q_norm = normalize_country_name(q_name)
-                q_norm = PAYS_MAPPING.get(q_norm, q_norm)
+                q_norm = q_name
                 quota_mapping[q_norm] = q["id"]
 
             # Recuperer toutes les affectations de cette enquete
@@ -1866,8 +1783,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
                     count = s.get("completions", 0) or 0
                     if seg:
                         # Normaliser le nom du segment
-                        seg_norm = normalize_country_name(seg)
-                        seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                        seg_norm = seg
                         global_counts[seg_norm] = global_counts.get(seg_norm, 0) + count
 
                 # Mettre a jour les quotas globaux par ID (pas par nom)
@@ -1902,17 +1818,68 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
                 "clics": 0
             }, on_conflict="date,enquete_id,affectation_id").execute()
 
+    # 11. Mettre a jour les completions_combinations (quotas croises)
+    if enquete_id:
+        quota_configs = sb.table("quota_configs")\
+            .select("id")\
+            .eq("enquete_id", enquete_id)\
+            .execute()
+
+        for qc in quota_configs.data:
+            qc_id = qc["id"]
+
+            # Recuperer les questions liees a cette config
+            qc_questions = sb.table("quota_config_questions")\
+                .select("segmentation_id, position, segmentations(question_id, nom)")\
+                .eq("quota_config_id", qc_id)\
+                .order("position")\
+                .execute()
+
+            if not qc_questions.data:
+                continue
+
+            # Pour chaque reponse, extraire les valeurs de TOUTES les questions du croisement
+            combo_counts = {}
+            for resp in enqueteur_responses:
+                combo = {}
+                valid = True
+                for qq in qc_questions.data:
+                    seg = qq.get("segmentations", {})
+                    question_id = seg.get("question_id", "")
+                    nom = seg.get("nom", "")
+                    value = extract_segment_value_from_response(resp, question_id)
+                    if not value or value == "Inconnu":
+                        valid = False
+                        break
+                    combo[nom] = value
+
+                if valid and combo:
+                    combo_key = json.dumps(combo, sort_keys=True)
+                    combo_counts[combo_key] = combo_counts.get(combo_key, 0) + 1
+
+            # Supprimer les anciennes completions pour cette config/affectation
+            sb.table("completions_combinations")\
+                .delete()\
+                .eq("affectation_id", affectation_id)\
+                .eq("quota_config_id", qc_id)\
+                .execute()
+
+            # Inserer les nouvelles completions par combinaison
+            for combo_key, count in combo_counts.items():
+                combo_dict = json.loads(combo_key)
+                sb.table("completions_combinations").insert({
+                    "affectation_id": affectation_id,
+                    "quota_config_id": qc_id,
+                    "combination": combo_dict,
+                    "completions": count
+                }).execute()
+
     return {
         "affectation_id": affectation_id,
         "survey_id": survey_id,
         "completions": completions_enqueteur,
-        "clics": clics_count,  # IPs uniques
-        "completions_attribuees": total_attribuees,
-        "completions_non_attribuees": total_non_attribuees,
-        "pays_counts": pays_counts,
-        "segment_counts": segment_counts,
-        "pays_matched": pays_matched,
-        "pays_non_matches": pays_non_matches
+        "clics": clics_count,
+        "segment_counts": segments_normalized,
     }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1927,8 +1894,7 @@ def list_pays(admin: dict = Depends(require_admin), sb: Client = Depends(get_sup
 
 @app.get("/admin/stats-pays")
 def get_stats_pays(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
-    """Stats de completions par pays (agregees) avec valides/invalides"""
-    # Recuperer toutes les completions_pays avec les infos pays
+    """Stats de completions par pays (agregees)"""
     res = sb.table("completions_pays")\
         .select("completions, objectif, pays(id, nom, code, quota)")\
         .execute()
@@ -1941,27 +1907,18 @@ def get_stats_pays(admin: dict = Depends(require_admin), sb: Client = Depends(ge
         completions = cp.get("completions", 0)
         objectif = cp.get("objectif", 0)
 
-        # Calculer valides (min) et invalides (depassement)
-        valides = min(completions, objectif) if objectif > 0 else completions
-        invalides = max(0, completions - objectif) if objectif > 0 else 0
-
         if pays_nom not in stats:
             stats[pays_nom] = {
                 "pays": pays_nom,
                 "code": pays.get("code", ""),
                 "completions": 0,
-                "valides": 0,
-                "invalides": 0,
                 "objectif": 0
             }
         stats[pays_nom]["completions"] += completions
-        stats[pays_nom]["valides"] += valides
-        stats[pays_nom]["invalides"] += invalides
         stats[pays_nom]["objectif"] += objectif
 
-    # Convertir en liste et trier par completions valides
     result = list(stats.values())
-    result.sort(key=lambda x: x["valides"], reverse=True)
+    result.sort(key=lambda x: x["completions"], reverse=True)
 
     return result
 
@@ -2035,8 +1992,7 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
         completions_enq = {}
         for a in affectations_enq:
             for s in all_cs.get(a["id"], []):
-                seg_norm = normalize_country_name(s.get("segment_value", ""))
-                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                seg_norm = s.get("segment_value", "")
                 completions_enq[seg_norm] = completions_enq.get(seg_norm, 0) + (s.get("completions") or 0)
 
         segmentations = sb.table("segmentations").select("id, nom, question_text").eq("enquete_id", enquete_id).execute()
@@ -2054,8 +2010,7 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
                 seg_val = q.get("segment_value", "")
                 pourcentage = q.get("pourcentage") or 0
                 objectif = int(objectif_total_enquete * pourcentage / 100)
-                seg_norm = normalize_country_name(seg_val)
-                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                seg_norm = seg_val
                 valides_brut = completions_enq.get(seg_norm, 0)
                 valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
                 quotas_liste.append({
@@ -2116,8 +2071,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
             .execute()
         completions_par_segment = {}
         for cs in cs_rows.data:
-            seg_norm = normalize_country_name(cs.get("segment_value", ""))
-            seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+            seg_norm = cs.get("segment_value", "")
             completions_par_segment[seg_norm] = completions_par_segment.get(seg_norm, 0) + (cs.get("completions") or 0)
 
         # Recuperer les segmentations de cette enquete
@@ -2143,8 +2097,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
                 pourcentage = q.get("pourcentage") or 0
                 objectif = int(objectif_total_aff * pourcentage / 100)
                 seg_val = q.get("segment_value", "")
-                seg_norm = normalize_country_name(seg_val)
-                seg_norm = PAYS_MAPPING.get(seg_norm, seg_norm)
+                seg_norm = seg_val
                 valides_brut = completions_par_segment.get(seg_norm, 0)
                 valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
                 total_objectif += objectif
@@ -2184,7 +2137,7 @@ async def fetch_all_survey_responses(survey_id: str) -> list:
     """Recuperer TOUTES les reponses d'un survey (pagination)"""
     all_responses = []
     page = 1
-    per_page = 100
+    per_page = 1000
 
     while True:
         responses = await fetch_survey_responses(survey_id, page, per_page)

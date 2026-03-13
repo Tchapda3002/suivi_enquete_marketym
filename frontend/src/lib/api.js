@@ -184,6 +184,22 @@ export const deleteQuota = (id) =>
   API.delete(`/admin/quotas/${id}`).then(r => r.data)
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ADMIN - QUOTAS CROISES
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const getQuotaConfigsByEnquete = (enqueteId) =>
+  API.get(`/admin/quota-configs/by-enquete/${enqueteId}`).then(r => r.data)
+
+export const createQuotaConfig = (data) =>
+  API.post('/admin/quota-configs', data).then(r => r.data)
+
+export const deleteQuotaConfig = (id) =>
+  API.delete(`/admin/quota-configs/${id}`).then(r => r.data)
+
+export const generateCombinations = (configId) =>
+  API.post(`/admin/quota-configs/${configId}/generate-combinations`).then(r => r.data)
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ADMIN - QUESTIONPRO
 // ══════════════════════════════════════════════════════════════════════════════
 
