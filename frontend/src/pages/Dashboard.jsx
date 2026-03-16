@@ -1017,7 +1017,7 @@ function RejoindreTab({ enqueteur, enquetesDisponibles, affectations, demandes, 
     const d = demandeMap[e.id]
     return !d || d.statut === 'refusee' // pas de demande OU refusee -> peut redemander
   })
-  const enquetesAcceptees = enquetesDisponibles.filter(e => demandeMap[e.id]?.statut === 'acceptee')
+  const enquetesAcceptees = enquetesDisponibles.filter(e => demandeMap[e.id]?.statut === 'acceptee' || affectationIds.has(e.id))
   const enquetesRefusees = enquetesDisponibles.filter(e => demandeMap[e.id]?.statut === 'refusee')
   const enquetesEnAttente = enquetesDisponibles.filter(e => demandeMap[e.id]?.statut === 'en_attente')
 
