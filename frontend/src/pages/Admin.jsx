@@ -4100,6 +4100,7 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
       {/* Modal commentaire */}
       {showCommentModal && (
         <Modal
+          isOpen={true}
           title={showCommentModal.action === 'accepter' ? 'Accepter la demande' : 'Refuser la demande'}
           onClose={() => { setShowCommentModal(null); setCommentaire('') }}
         >
