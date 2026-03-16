@@ -16,13 +16,13 @@ from .auth import auth_router, require_admin, require_super_admin, get_current_u
 
 app = FastAPI(title="Suivi Enqueteurs API v5")
 
-# CORS securise - seulement les origines autorisees
+# CORS - ouvert a toutes les origines (auth via Bearer token, pas de cookies)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["*"],
 )
 
 # Inclure le router d'authentification
