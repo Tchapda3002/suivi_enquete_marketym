@@ -3969,10 +3969,16 @@ function MyEnqueteDetailView({ affectation, onBack }) {
 function DemandesView({ demandes, onAccepter, onRefuser }) {
   const [filter, setFilter] = useState('en_attente')
   const [loadingId, setLoadingId] = useState(null)
+  const [bulkLoading, setBulkLoading] = useState(false)
   const [commentaire, setCommentaire] = useState('')
-  const [showCommentModal, setShowCommentModal] = useState(null) // {id, action}
+  const [showCommentModal, setShowCommentModal] = useState(null) // {ids: [], action}
+  const [selection, setSelection] = useState(new Set())
 
   const filtered = demandes.filter(d => filter === 'toutes' || d.statut === filter)
+  const filteredEnAttente = filtered.filter(d => d.statut === 'en_attente')
+  const allEnAttenteIds = filteredEnAttente.map(d => d.id)
+  const selectionEnAttente = [...selection].filter(id => allEnAttenteIds.includes(id))
+  const allSelected = allEnAttenteIds.length > 0 && allEnAttenteIds.every(id => selection.has(id))
 
   const STATUT_CONFIG = {
     en_attente: { label: 'En attente', color: 'bg-yellow-100 text-yellow-700' },
@@ -3980,16 +3986,40 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
     refusee:    { label: 'Refusee',    color: 'bg-red-100 text-red-700' },
   }
 
-  async function handleAction(id, action) {
-    setLoadingId(id)
+  function toggleSelection(id) {
+    setSelection(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelection(prev => {
+        const next = new Set(prev)
+        allEnAttenteIds.forEach(id => next.delete(id))
+        return next
+      })
+    } else {
+      setSelection(prev => new Set([...prev, ...allEnAttenteIds]))
+    }
+  }
+
+  async function handleAction(ids, action) {
+    const isBulk = ids.length > 1
+    isBulk ? setBulkLoading(true) : setLoadingId(ids[0])
     try {
-      if (action === 'accepter') await onAccepter(id, commentaire)
-      else await onRefuser(id, commentaire)
+      await Promise.all(ids.map(id =>
+        action === 'accepter' ? onAccepter(id, commentaire) : onRefuser(id, commentaire)
+      ))
       setShowCommentModal(null)
       setCommentaire('')
+      setSelection(new Set())
     } catch (e) {
       alert(e?.response?.data?.detail || 'Erreur')
     } finally {
+      setBulkLoading(false)
       setLoadingId(null)
     }
   }
@@ -4008,7 +4038,7 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
       </div>
 
       {/* Filtres */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
         {[
           { id: 'en_attente', label: 'En attente' },
           { id: 'acceptee', label: 'Acceptees' },
@@ -4017,7 +4047,7 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
         ].map(f => (
           <button
             key={f.id}
-            onClick={() => setFilter(f.id)}
+            onClick={() => { setFilter(f.id); setSelection(new Set()) }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               filter === f.id ? 'bg-[#111827] text-white' : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
             }`}
@@ -4030,6 +4060,43 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
         ))}
       </div>
 
+      {/* Barre d'actions groupees */}
+      {allEnAttenteIds.length > 0 && (
+        <div className="flex items-center gap-3 p-3 bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleAll}
+              className="w-4 h-4 rounded accent-[#059669]"
+            />
+            <span className="text-sm text-[#374151]">
+              {allSelected ? 'Tout deselectioner' : 'Tout selectionner'}
+              {selectionEnAttente.length > 0 && ` (${selectionEnAttente.length})`}
+            </span>
+          </label>
+
+          {selectionEnAttente.length > 0 && (
+            <div className="flex gap-2 ml-auto">
+              <button
+                onClick={() => setShowCommentModal({ ids: selectionEnAttente, action: 'accepter' })}
+                disabled={bulkLoading}
+                className="flex items-center gap-1.5 px-4 py-2 bg-[#059669] text-white text-sm font-medium rounded-lg hover:bg-[#047857] disabled:opacity-50 transition-colors"
+              >
+                Accepter la selection ({selectionEnAttente.length})
+              </button>
+              <button
+                onClick={() => setShowCommentModal({ ids: selectionEnAttente, action: 'refuser' })}
+                disabled={bulkLoading}
+                className="flex items-center gap-1.5 px-4 py-2 bg-[#FEF2F2] text-[#DC2626] text-sm font-medium rounded-lg hover:bg-[#FEE2E2] disabled:opacity-50 transition-colors"
+              >
+                Refuser la selection ({selectionEnAttente.length})
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Liste */}
       <div className="space-y-3">
         {filtered.length === 0 && (
@@ -4039,10 +4106,19 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
           const enqueteur = d.enqueteurs
           const enquete = d.enquetes
           const cfg = STATUT_CONFIG[d.statut]
+          const isSelected = selection.has(d.id)
           return (
-            <Card key={d.id} className="p-5">
+            <Card key={d.id} className={`p-5 transition-colors ${isSelected ? 'ring-2 ring-[#059669] ring-offset-1' : ''}`}>
               <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-4 flex-1 min-w-0">
+                <div className="flex items-start gap-3 flex-1 min-w-0">
+                  {d.statut === 'en_attente' && (
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelection(d.id)}
+                      className="mt-1 w-4 h-4 rounded accent-[#059669] flex-shrink-0"
+                    />
+                  )}
                   <div className="w-10 h-10 rounded-full bg-[#F3F4F6] flex items-center justify-center flex-shrink-0">
                     <span className="text-sm font-semibold text-[#374151]">
                       {enqueteur?.prenom?.[0]}{enqueteur?.nom?.[0]}
@@ -4076,15 +4152,15 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
                 {d.statut === 'en_attente' && (
                   <div className="flex gap-2 flex-shrink-0">
                     <button
-                      onClick={() => setShowCommentModal({ id: d.id, action: 'accepter' })}
-                      disabled={loadingId === d.id}
+                      onClick={() => setShowCommentModal({ ids: [d.id], action: 'accepter' })}
+                      disabled={loadingId === d.id || bulkLoading}
                       className="px-4 py-2 bg-[#059669] text-white text-sm font-medium rounded-lg hover:bg-[#047857] disabled:opacity-50 transition-colors"
                     >
                       Accepter
                     </button>
                     <button
-                      onClick={() => setShowCommentModal({ id: d.id, action: 'refuser' })}
-                      disabled={loadingId === d.id}
+                      onClick={() => setShowCommentModal({ ids: [d.id], action: 'refuser' })}
+                      disabled={loadingId === d.id || bulkLoading}
                       className="px-4 py-2 bg-[#FEF2F2] text-[#DC2626] text-sm font-medium rounded-lg hover:bg-[#FEE2E2] disabled:opacity-50 transition-colors"
                     >
                       Refuser
@@ -4101,13 +4177,15 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
       {showCommentModal && (
         <Modal
           isOpen={true}
-          title={showCommentModal.action === 'accepter' ? 'Accepter la demande' : 'Refuser la demande'}
+          title={showCommentModal.action === 'accepter'
+            ? `Accepter ${showCommentModal.ids.length > 1 ? `${showCommentModal.ids.length} demandes` : 'la demande'}`
+            : `Refuser ${showCommentModal.ids.length > 1 ? `${showCommentModal.ids.length} demandes` : 'la demande'}`}
           onClose={() => { setShowCommentModal(null); setCommentaire('') }}
         >
           <div className="space-y-4">
             <p className="text-sm text-[#6B7280]">
               {showCommentModal.action === 'accepter'
-                ? "L'affectation sera creee automatiquement. Vous pouvez ajouter un commentaire optionnel."
+                ? `${showCommentModal.ids.length > 1 ? `${showCommentModal.ids.length} affectations seront creees` : "L'affectation sera creee"}. Commentaire optionnel.`
                 : "Indiquez optionnellement la raison du refus."}
             </p>
             <Input
@@ -4118,12 +4196,12 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
             />
             <div className="flex gap-3">
               <Button
-                onClick={() => handleAction(showCommentModal.id, showCommentModal.action)}
-                loading={loadingId !== null}
+                onClick={() => handleAction(showCommentModal.ids, showCommentModal.action)}
+                loading={loadingId !== null || bulkLoading}
                 variant={showCommentModal.action === 'accepter' ? 'primary' : 'danger'}
                 fullWidth
               >
-                {showCommentModal.action === 'accepter' ? 'Confirmer et creer l\'affectation' : 'Confirmer le refus'}
+                {showCommentModal.action === 'accepter' ? 'Confirmer' : 'Confirmer le refus'}
               </Button>
               <Button onClick={() => { setShowCommentModal(null); setCommentaire('') }} variant="secondary" fullWidth>
                 Annuler
