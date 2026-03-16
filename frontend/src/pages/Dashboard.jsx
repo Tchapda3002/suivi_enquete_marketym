@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getEnqueteur, syncEnqueteur, getEnqueteurSegmentations, getHistoriqueEnqueteur, authRequestProfileOTP, authUpdateProfile } from '../lib/api'
+import { getEnqueteur, syncEnqueteur, getEnqueteurSegmentations, getHistoriqueEnqueteur, authRequestProfileOTP, authUpdateProfile, creerDemande, getDemandesEnqueteur, getEnquetesDisponibles } from '../lib/api'
 import { Card, Badge, ProgressBar, CopyButton, Spinner, Avatar, Button, LineChart, Input, Modal } from '../components/ui'
 
 const STATUT_CONFIG = {
@@ -18,6 +18,8 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false)
   const [segmentations, setSegmentations] = useState([])
   const [historique, setHistorique] = useState([])
+  const [demandes, setDemandes] = useState([])
+  const [enquetesDisponibles, setEnquetesDisponibles] = useState([])
 
   useEffect(() => {
     const stored = sessionStorage.getItem('user')
@@ -28,14 +30,18 @@ export default function Dashboard() {
 
     const refresh = async () => {
       try {
-        const [fresh, segs, hist] = await Promise.all([
+        const [fresh, segs, hist, dem, enquetes] = await Promise.all([
           getEnqueteur(data.id),
           getEnqueteurSegmentations(data.id),
-          getHistoriqueEnqueteur(data.id)
+          getHistoriqueEnqueteur(data.id),
+          getDemandesEnqueteur(data.id),
+          getEnquetesDisponibles()
         ])
         setEnq(fresh)
         setSegmentations(segs || [])
         setHistorique(hist || [])
+        setDemandes(dem || [])
+        setEnquetesDisponibles(enquetes || [])
         sessionStorage.setItem('user', JSON.stringify(fresh))
       } catch {}
     }
@@ -148,6 +154,13 @@ export default function Dashboard() {
               badge={affectations.length}
             />
             <TabButton
+              active={activeTab === 'rejoindre'}
+              onClick={() => { setActiveTab('rejoindre'); setSelectedEnquete(null) }}
+              icon={<PlusCircleIcon />}
+              label="Rejoindre"
+              badge={demandes.filter(d => d.statut === 'en_attente').length || null}
+            />
+            <TabButton
               active={activeTab === 'profil'}
               onClick={() => { setActiveTab('profil'); setSelectedEnquete(null) }}
               icon={<UserIcon />}
@@ -186,6 +199,19 @@ export default function Dashboard() {
             />
           )
         )}
+        {activeTab === 'rejoindre' && (
+          <RejoindreTab
+            enqueteur={enq}
+            enquetesDisponibles={enquetesDisponibles}
+            affectations={affectations}
+            demandes={demandes}
+            onDemande={(dem) => setDemandes(prev => {
+              const idx = prev.findIndex(d => d.enquete_id === dem.enquete_id)
+              if (idx >= 0) { const n = [...prev]; n[idx] = dem; return n }
+              return [...prev, dem]
+            })}
+          />
+        )}
         {activeTab === 'profil' && (
           <ProfilTab enqueteur={enq} onUpdate={setEnq} />
         )}
@@ -223,6 +249,16 @@ function UserIcon() {
     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
       <circle cx="12" cy="7" r="4" />
+    </svg>
+  )
+}
+
+function PlusCircleIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="16" strokeLinecap="round" />
+      <line x1="8" y1="12" x2="16" y2="12" strokeLinecap="round" />
     </svg>
   )
 }
@@ -941,6 +977,122 @@ function ProfilTab({ enqueteur, onUpdate }) {
           </div>
         </div>
       </Modal>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   REJOINDRE TAB
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function RejoindreTab({ enqueteur, enquetesDisponibles, affectations, demandes, onDemande }) {
+  const [loading, setLoading] = useState(null) // enquete_id en cours
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  const affectationIds = new Set(affectations.map(a => a.enquete_id))
+  const demandeMap = Object.fromEntries(demandes.map(d => [d.enquete_id, d]))
+
+  async function handleDemande(enqueteId) {
+    setLoading(enqueteId)
+    setError('')
+    setSuccess('')
+    try {
+      const result = await creerDemande(enqueteur.id, enqueteId)
+      onDemande(result.demande || { enquete_id: enqueteId, statut: 'en_attente' })
+      setSuccess('Demande envoyee avec succes !')
+      setTimeout(() => setSuccess(''), 3000)
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Erreur lors de la demande')
+      setTimeout(() => setError(''), 4000)
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const STATUT_LABELS = {
+    en_attente: { label: 'En attente', color: 'bg-yellow-100 text-yellow-700' },
+    acceptee:   { label: 'Acceptee',   color: 'bg-green-100 text-green-700' },
+    refusee:    { label: 'Refusee',    color: 'bg-red-100 text-red-700' },
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-[#111827]">Rejoindre une enquete</h2>
+        <p className="text-sm text-[#6B7280] mt-1">Faites une demande pour participer a une enquete. L'administrateur devra l'accepter.</p>
+      </div>
+
+      {success && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm">{success}</div>
+      )}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
+      )}
+
+      <div className="grid gap-4">
+        {enquetesDisponibles.length === 0 && (
+          <Card className="p-8 text-center text-[#6B7280]">Aucune enquete disponible</Card>
+        )}
+        {enquetesDisponibles.map(enquete => {
+          const isAffecte = affectationIds.has(enquete.id)
+          const demande = demandeMap[enquete.id]
+
+          return (
+            <Card key={enquete.id} className="p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-semibold text-[#111827]">{enquete.nom}</h3>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      enquete.statut === 'en_cours' ? 'bg-blue-100 text-blue-700' :
+                      enquete.statut === 'termine' ? 'bg-gray-100 text-gray-600' :
+                      'bg-yellow-100 text-yellow-700'
+                    }`}>{enquete.statut}</span>
+                  </div>
+                  {enquete.description && (
+                    <p className="text-sm text-[#6B7280] mt-1 truncate">{enquete.description}</p>
+                  )}
+                  {enquete.cible && (
+                    <p className="text-xs text-[#9CA3AF] mt-1">{enquete.cible}</p>
+                  )}
+                </div>
+
+                <div className="flex-shrink-0">
+                  {isAffecte ? (
+                    <span className="text-xs px-3 py-1.5 rounded-full bg-green-100 text-green-700 font-medium">Deja affecte</span>
+                  ) : demande ? (
+                    <span className={`text-xs px-3 py-1.5 rounded-full font-medium ${STATUT_LABELS[demande.statut]?.color}`}>
+                      {STATUT_LABELS[demande.statut]?.label}
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleDemande(enquete.id)}
+                      disabled={loading === enquete.id}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-[#059669] text-white text-sm font-medium rounded-lg hover:bg-[#047857] disabled:opacity-50 transition-colors"
+                    >
+                      {loading === enquete.id ? (
+                        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                      ) : (
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16" strokeLinecap="round"/><line x1="8" y1="12" x2="16" y2="12" strokeLinecap="round"/></svg>
+                      )}
+                      Demander
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {demande?.commentaire_admin && (
+                <div className="mt-3 pt-3 border-t border-[#F3F4F6]">
+                  <p className="text-xs text-[#6B7280]">
+                    <span className="font-medium">Commentaire admin :</span> {demande.commentaire_admin}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )
+        })}
+      </div>
     </div>
   )
 }

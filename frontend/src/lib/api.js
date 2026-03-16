@@ -272,3 +272,25 @@ export const getHistoriqueEnqueteur = (enqueteurId, { from_date, to_date } = {})
   if (to_date) params.set('to_date', to_date)
   return API.get(`/enqueteur/${enqueteurId}/historique?${params}`).then(r => r.data)
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DEMANDES D'AFFECTATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const getEnquetesDisponibles = () =>
+  API.get('/enquetes/disponibles').then(r => r.data)
+
+export const creerDemande = (enqueteurId, enqueteId, message = '') =>
+  API.post(`/enqueteur/${enqueteurId}/demandes`, { enquete_id: enqueteId, message }).then(r => r.data)
+
+export const getDemandesEnqueteur = (enqueteurId) =>
+  API.get(`/enqueteur/${enqueteurId}/demandes`).then(r => r.data)
+
+export const getDemandesAdmin = (statut = null) =>
+  API.get('/admin/demandes', { params: statut ? { statut } : {} }).then(r => r.data)
+
+export const accepterDemande = (demandeId, commentaire = '') =>
+  API.put(`/admin/demandes/${demandeId}/accepter`, { commentaire }).then(r => r.data)
+
+export const refuserDemande = (demandeId, commentaire = '') =>
+  API.put(`/admin/demandes/${demandeId}/refuser`, { commentaire }).then(r => r.data)

@@ -12,7 +12,7 @@ from supabase import create_client, Client
 from .config import settings
 
 # Module d'authentification
-from .auth import auth_router, require_admin, require_super_admin
+from .auth import auth_router, require_admin, require_super_admin, get_current_user
 
 app = FastAPI(title="Suivi Enqueteurs API v5")
 
@@ -1148,6 +1148,151 @@ async def migrate_affectation_links(request: Request, admin: dict = Depends(requ
             updated += 1
 
     return {"message": f"{updated} affectations mises a jour", "updated": updated}
+
+@app.get("/enquetes/disponibles")
+def list_enquetes_disponibles(current_user: dict = Depends(get_current_user), sb: Client = Depends(get_supabase)):
+    """Liste des enquetes disponibles pour un enqueteur (nom, statut, description, cible)"""
+    result = sb.table("enquetes").select("id, nom, statut, description, cible").order("nom").execute()
+    return result.data
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTES - DEMANDES D'AFFECTATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/enqueteur/{enqueteur_id}/demandes")
+def creer_demande(enqueteur_id: str, data: dict, current_user: dict = Depends(get_current_user), sb: Client = Depends(get_supabase)):
+    """Enqueteur demande a rejoindre une enquete"""
+    enquete_id = data.get("enquete_id")
+    message = data.get("message", "")
+    if not enquete_id:
+        raise HTTPException(status_code=400, detail="enquete_id requis")
+
+    # Verifier que l'enquete existe et est active
+    enquete = sb.table("enquetes").select("id, statut").eq("id", enquete_id).execute()
+    if not enquete.data:
+        raise HTTPException(status_code=404, detail="Enquete non trouvee")
+
+    # Verifier qu'il n'est pas deja affecte
+    existing_aff = sb.table("affectations").select("id").eq("enqueteur_id", enqueteur_id).eq("enquete_id", enquete_id).execute()
+    if existing_aff.data:
+        raise HTTPException(status_code=400, detail="Vous etes deja affecte a cette enquete")
+
+    # Creer ou mettre a jour la demande
+    try:
+        result = sb.table("demandes_affectation").upsert({
+            "enqueteur_id": enqueteur_id,
+            "enquete_id": enquete_id,
+            "statut": "en_attente",
+            "message": message,
+            "updated_at": datetime.utcnow().isoformat()
+        }, on_conflict="enqueteur_id,enquete_id").execute()
+        return {"message": "Demande envoyee", "demande": result.data[0] if result.data else {}}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/enqueteur/{enqueteur_id}/demandes")
+def list_demandes_enqueteur(enqueteur_id: str, current_user: dict = Depends(get_current_user), sb: Client = Depends(get_supabase)):
+    """Lister les demandes d'un enqueteur"""
+    result = sb.table("demandes_affectation").select(
+        "id, statut, message, commentaire_admin, created_at, enquete_id, enquetes(id, nom, statut)"
+    ).eq("enqueteur_id", enqueteur_id).order("created_at", desc=True).execute()
+    return result.data
+
+@app.get("/admin/demandes")
+def list_demandes_admin(statut: str = None, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Lister toutes les demandes (admin)"""
+    query = sb.table("demandes_affectation").select(
+        "id, statut, message, commentaire_admin, created_at, updated_at, enqueteur_id, enquete_id, "
+        "enqueteurs(id, nom, prenom, email), enquetes(id, nom, statut)"
+    ).order("created_at", desc=True)
+    if statut:
+        query = query.eq("statut", statut)
+    result = query.execute()
+    return result.data
+
+@app.put("/admin/demandes/{demande_id}/accepter")
+async def accepter_demande(demande_id: str, data: dict = {}, request: Request = None, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Accepter une demande : cree l'affectation automatiquement"""
+    commentaire = data.get("commentaire", "") if data else ""
+
+    # Recuperer la demande
+    demande = sb.table("demandes_affectation").select("*").eq("id", demande_id).execute()
+    if not demande.data:
+        raise HTTPException(status_code=404, detail="Demande non trouvee")
+    d = demande.data[0]
+
+    if d["statut"] != "en_attente":
+        raise HTTPException(status_code=400, detail="Cette demande a deja ete traitee")
+
+    # Verifier qu'il n'est pas deja affecte
+    existing = sb.table("affectations").select("id").eq("enqueteur_id", d["enqueteur_id"]).eq("enquete_id", d["enquete_id"]).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail="L'enqueteur est deja affecte a cette enquete")
+
+    # Recuperer l'enquete et l'enqueteur
+    enquete = sb.table("enquetes").select("*").eq("id", d["enquete_id"]).execute()
+    enqueteur = sb.table("enqueteurs").select("*").eq("id", d["enqueteur_id"]).execute()
+    if not enquete.data or not enqueteur.data:
+        raise HTTPException(status_code=404, detail="Enquete ou enqueteur introuvable")
+
+    enq = enquete.data[0]
+    enqueteur_data = enqueteur.data[0]
+    survey_id = enq["survey_id"]
+    token = enqueteur_data.get("token", "")
+
+    # Construire les liens
+    lien_tracking = f"{settings.BACKEND_URL}/r/"
+    lien_direct = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={token}"
+
+    # Creer l'affectation
+    aff_result = sb.table("affectations").insert({
+        "enqueteur_id": d["enqueteur_id"],
+        "enquete_id": d["enquete_id"],
+        "survey_id": survey_id,
+        "lien_direct": lien_direct,
+        "objectif_total": 0,
+        "completions_total": 0,
+        "clics": 0,
+        "statut": "actif"
+    }).execute()
+
+    if not aff_result.data:
+        raise HTTPException(status_code=500, detail="Erreur lors de la creation de l'affectation")
+
+    aff_id = aff_result.data[0]["id"]
+
+    # Mettre a jour le lien tracking avec l'ID de l'affectation
+    sb.table("affectations").update({
+        "lien_questionnaire": f"{settings.BACKEND_URL}/r/{aff_id}"
+    }).eq("id", aff_id).execute()
+
+    # Mettre a jour la demande
+    sb.table("demandes_affectation").update({
+        "statut": "acceptee",
+        "commentaire_admin": commentaire,
+        "updated_at": datetime.utcnow().isoformat()
+    }).eq("id", demande_id).execute()
+
+    return {"message": "Demande acceptee, affectation creee", "affectation_id": aff_id}
+
+@app.put("/admin/demandes/{demande_id}/refuser")
+def refuser_demande(demande_id: str, data: dict = {}, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Refuser une demande"""
+    commentaire = data.get("commentaire", "") if data else ""
+
+    demande = sb.table("demandes_affectation").select("id, statut").eq("id", demande_id).execute()
+    if not demande.data:
+        raise HTTPException(status_code=404, detail="Demande non trouvee")
+    if demande.data[0]["statut"] != "en_attente":
+        raise HTTPException(status_code=400, detail="Cette demande a deja ete traitee")
+
+    sb.table("demandes_affectation").update({
+        "statut": "refusee",
+        "commentaire_admin": commentaire,
+        "updated_at": datetime.utcnow().isoformat()
+    }).eq("id", demande_id).execute()
+
+    return {"message": "Demande refusee"}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ROUTES ADMIN - SEGMENTATIONS

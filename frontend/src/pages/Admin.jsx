@@ -40,6 +40,9 @@ import {
   authRequestProfileOTP,
   authUpdateProfile,
   updateEnqueteurRole,
+  getDemandesAdmin,
+  accepterDemande,
+  refuserDemande,
 } from '../lib/api'
 import { Card, Badge, Button, Modal, Input, Avatar, Spinner, LineChart, CopyButton } from '../components/ui'
 
@@ -80,6 +83,9 @@ export default function Admin() {
   const [adminSegmentations, setAdminSegmentations] = useState([])
   const [adminHistorique, setAdminHistorique] = useState([])
 
+  // Demandes d'affectation
+  const [demandes, setDemandes] = useState([])
+
   // Modals
   const [showEnqueteModal, setShowEnqueteModal] = useState(false)
   const [showEnqueteurModal, setShowEnqueteurModal] = useState(false)
@@ -102,13 +108,14 @@ export default function Admin() {
     try {
       const userId = adminId || adminUser?.id
       // Charger les données principales
-      const [d, e, enq, segStats, hist, affs] = await Promise.all([
+      const [d, e, enq, segStats, hist, affs, dem] = await Promise.all([
         getDashboard(),
         listEnquetes(),
         listEnqueteurs(),
         getSegmentationsStats(),
         getHistoriqueGlobal({ from_date: dr.from_date, to_date: dr.to_date }),
-        listAffectations()
+        listAffectations(),
+        getDemandesAdmin()
       ])
       setDashboard(d)
       setEnquetes(e)
@@ -116,6 +123,7 @@ export default function Admin() {
       setSegmentationsStats(segStats)
       setHistorique(hist || [])
       setAllAffectations(affs || [])
+      setDemandes(dem || [])
 
       // Charger les données "Mes enquetes" separement (pour ne pas bloquer si erreur)
       if (userId) {
@@ -291,6 +299,15 @@ export default function Admin() {
           />
 
           <NavButton
+            icon={<BellIcon />}
+            label="Demandes"
+            active={view === 'demandes'}
+            collapsed={sidebarCollapsed}
+            onClick={() => setView('demandes')}
+            badge={demandes.filter(d => d.statut === 'en_attente').length || undefined}
+          />
+
+          <NavButton
             icon={<UserIcon />}
             label="Mon profil"
             active={view === 'profil'}
@@ -421,6 +438,21 @@ export default function Admin() {
               onSelect={setSelectedMyEnquete}
             />
           )
+        ) : view === 'demandes' ? (
+          <DemandesView
+            demandes={demandes}
+            onAccepter={async (id, commentaire) => {
+              await accepterDemande(id, commentaire)
+              const updated = await getDemandesAdmin()
+              setDemandes(updated || [])
+              await loadAll()
+            }}
+            onRefuser={async (id, commentaire) => {
+              await refuserDemande(id, commentaire)
+              const updated = await getDemandesAdmin()
+              setDemandes(updated || [])
+            }}
+          />
         ) : view === 'profil' ? (
           <AdminProfilView
             user={adminUser}
@@ -569,6 +601,15 @@ function LogoutIcon() {
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
       <polyline points="16 17 21 12 16 7" />
       <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  )
+}
+
+function BellIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -3916,6 +3957,179 @@ function MyEnqueteDetailView({ affectation, onBack }) {
             </div>
           </div>
         </Card>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DEMANDES VIEW
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+function DemandesView({ demandes, onAccepter, onRefuser }) {
+  const [filter, setFilter] = useState('en_attente')
+  const [loadingId, setLoadingId] = useState(null)
+  const [commentaire, setCommentaire] = useState('')
+  const [showCommentModal, setShowCommentModal] = useState(null) // {id, action}
+
+  const filtered = demandes.filter(d => filter === 'toutes' || d.statut === filter)
+
+  const STATUT_CONFIG = {
+    en_attente: { label: 'En attente', color: 'bg-yellow-100 text-yellow-700' },
+    acceptee:   { label: 'Acceptee',   color: 'bg-green-100 text-green-700' },
+    refusee:    { label: 'Refusee',    color: 'bg-red-100 text-red-700' },
+  }
+
+  async function handleAction(id, action) {
+    setLoadingId(id)
+    try {
+      if (action === 'accepter') await onAccepter(id, commentaire)
+      else await onRefuser(id, commentaire)
+      setShowCommentModal(null)
+      setCommentaire('')
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'Erreur')
+    } finally {
+      setLoadingId(null)
+    }
+  }
+
+  const enAttente = demandes.filter(d => d.statut === 'en_attente').length
+
+  return (
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-[#111827]">Demandes d'affectation</h1>
+        <p className="text-sm text-[#6B7280] mt-1">
+          {enAttente > 0
+            ? `${enAttente} demande${enAttente > 1 ? 's' : ''} en attente de traitement`
+            : 'Aucune demande en attente'}
+        </p>
+      </div>
+
+      {/* Filtres */}
+      <div className="flex gap-2">
+        {[
+          { id: 'en_attente', label: 'En attente' },
+          { id: 'acceptee', label: 'Acceptees' },
+          { id: 'refusee', label: 'Refusees' },
+          { id: 'toutes', label: 'Toutes' },
+        ].map(f => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              filter === f.id ? 'bg-[#111827] text-white' : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
+            }`}
+          >
+            {f.label}
+            {f.id === 'en_attente' && enAttente > 0 && (
+              <span className="ml-2 bg-[#DC2626] text-white text-xs rounded-full px-1.5">{enAttente}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Liste */}
+      <div className="space-y-3">
+        {filtered.length === 0 && (
+          <Card className="p-8 text-center text-[#6B7280]">Aucune demande</Card>
+        )}
+        {filtered.map(d => {
+          const enqueteur = d.enqueteurs
+          const enquete = d.enquetes
+          const cfg = STATUT_CONFIG[d.statut]
+          return (
+            <Card key={d.id} className="p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-4 flex-1 min-w-0">
+                  <div className="w-10 h-10 rounded-full bg-[#F3F4F6] flex items-center justify-center flex-shrink-0">
+                    <span className="text-sm font-semibold text-[#374151]">
+                      {enqueteur?.prenom?.[0]}{enqueteur?.nom?.[0]}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-[#111827]">
+                        {enqueteur?.prenom} {enqueteur?.nom}
+                      </span>
+                      <span className="text-xs text-[#9CA3AF]">{enqueteur?.email}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cfg?.color}`}>
+                        {cfg?.label}
+                      </span>
+                    </div>
+                    <p className="text-sm text-[#4B5563] mt-1">
+                      Souhaite rejoindre <span className="font-medium">{enquete?.nom}</span>
+                    </p>
+                    {d.message && (
+                      <p className="text-xs text-[#6B7280] mt-1 italic">"{d.message}"</p>
+                    )}
+                    {d.commentaire_admin && (
+                      <p className="text-xs text-[#9CA3AF] mt-1">Commentaire : {d.commentaire_admin}</p>
+                    )}
+                    <p className="text-xs text-[#9CA3AF] mt-1">
+                      {new Date(d.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </p>
+                  </div>
+                </div>
+
+                {d.statut === 'en_attente' && (
+                  <div className="flex gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => setShowCommentModal({ id: d.id, action: 'accepter' })}
+                      disabled={loadingId === d.id}
+                      className="px-4 py-2 bg-[#059669] text-white text-sm font-medium rounded-lg hover:bg-[#047857] disabled:opacity-50 transition-colors"
+                    >
+                      Accepter
+                    </button>
+                    <button
+                      onClick={() => setShowCommentModal({ id: d.id, action: 'refuser' })}
+                      disabled={loadingId === d.id}
+                      className="px-4 py-2 bg-[#FEF2F2] text-[#DC2626] text-sm font-medium rounded-lg hover:bg-[#FEE2E2] disabled:opacity-50 transition-colors"
+                    >
+                      Refuser
+                    </button>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )
+        })}
+      </div>
+
+      {/* Modal commentaire */}
+      {showCommentModal && (
+        <Modal
+          title={showCommentModal.action === 'accepter' ? 'Accepter la demande' : 'Refuser la demande'}
+          onClose={() => { setShowCommentModal(null); setCommentaire('') }}
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-[#6B7280]">
+              {showCommentModal.action === 'accepter'
+                ? "L'affectation sera creee automatiquement. Vous pouvez ajouter un commentaire optionnel."
+                : "Indiquez optionnellement la raison du refus."}
+            </p>
+            <Input
+              label="Commentaire (optionnel)"
+              placeholder="..."
+              value={commentaire}
+              onChange={e => setCommentaire(e.target.value)}
+            />
+            <div className="flex gap-3">
+              <Button
+                onClick={() => handleAction(showCommentModal.id, showCommentModal.action)}
+                loading={loadingId !== null}
+                variant={showCommentModal.action === 'accepter' ? 'primary' : 'danger'}
+                fullWidth
+              >
+                {showCommentModal.action === 'accepter' ? 'Confirmer et creer l\'affectation' : 'Confirmer le refus'}
+              </Button>
+              <Button onClick={() => { setShowCommentModal(null); setCommentaire('') }} variant="secondary" fullWidth>
+                Annuler
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )
