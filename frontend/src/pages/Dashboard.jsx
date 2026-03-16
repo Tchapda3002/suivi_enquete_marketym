@@ -29,21 +29,21 @@ export default function Dashboard() {
     setLoading(false)
 
     const refresh = async () => {
-      try {
-        const [fresh, segs, hist, dem, enquetes] = await Promise.all([
-          getEnqueteur(data.id),
-          getEnqueteurSegmentations(data.id),
-          getHistoriqueEnqueteur(data.id),
-          getDemandesEnqueteur(data.id),
-          getEnquetesDisponibles()
-        ])
-        setEnq(fresh)
-        setSegmentations(segs || [])
-        setHistorique(hist || [])
-        setDemandes(dem || [])
-        setEnquetesDisponibles(enquetes || [])
-        sessionStorage.setItem('user', JSON.stringify(fresh))
-      } catch {}
+      const [fresh, segs, hist, dem, enquetes] = await Promise.allSettled([
+        getEnqueteur(data.id),
+        getEnqueteurSegmentations(data.id),
+        getHistoriqueEnqueteur(data.id),
+        getDemandesEnqueteur(data.id),
+        getEnquetesDisponibles()
+      ])
+      if (fresh.status === 'fulfilled') {
+        setEnq(fresh.value)
+        sessionStorage.setItem('user', JSON.stringify(fresh.value))
+      }
+      if (segs.status === 'fulfilled') setSegmentations(segs.value || [])
+      if (hist.status === 'fulfilled') setHistorique(hist.value || [])
+      if (dem.status === 'fulfilled') setDemandes(dem.value || [])
+      if (enquetes.status === 'fulfilled') setEnquetesDisponibles(enquetes.value || [])
     }
     refresh()
     const interval = setInterval(refresh, 30000)

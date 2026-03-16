@@ -1150,7 +1150,7 @@ async def migrate_affectation_links(request: Request, admin: dict = Depends(requ
     return {"message": f"{updated} affectations mises a jour", "updated": updated}
 
 @app.get("/enquetes/disponibles")
-def list_enquetes_disponibles(current_user: dict = Depends(get_current_user), sb: Client = Depends(get_supabase)):
+def list_enquetes_disponibles(sb: Client = Depends(get_supabase)):
     """Liste des enquetes disponibles pour un enqueteur (nom, statut, description, cible)"""
     result = sb.table("enquetes").select("id, nom, statut, description, cible").order("nom").execute()
     return result.data
@@ -1160,7 +1160,7 @@ def list_enquetes_disponibles(current_user: dict = Depends(get_current_user), sb
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/enqueteur/{enqueteur_id}/demandes")
-def creer_demande(enqueteur_id: str, data: dict, current_user: dict = Depends(get_current_user), sb: Client = Depends(get_supabase)):
+def creer_demande(enqueteur_id: str, data: dict, sb: Client = Depends(get_supabase)):
     """Enqueteur demande a rejoindre une enquete"""
     enquete_id = data.get("enquete_id")
     message = data.get("message", "")
@@ -1191,7 +1191,7 @@ def creer_demande(enqueteur_id: str, data: dict, current_user: dict = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/enqueteur/{enqueteur_id}/demandes")
-def list_demandes_enqueteur(enqueteur_id: str, current_user: dict = Depends(get_current_user), sb: Client = Depends(get_supabase)):
+def list_demandes_enqueteur(enqueteur_id: str, sb: Client = Depends(get_supabase)):
     """Lister les demandes d'un enqueteur"""
     result = sb.table("demandes_affectation").select(
         "id, statut, message, commentaire_admin, created_at, enquete_id, enquetes(id, nom, statut)"
