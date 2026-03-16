@@ -1211,9 +1211,13 @@ def list_demandes_admin(statut: str = None, admin: dict = Depends(require_admin)
     return result.data
 
 @app.put("/admin/demandes/{demande_id}/accepter")
-async def accepter_demande(demande_id: str, data: dict = {}, request: Request = None, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+async def accepter_demande(demande_id: str, request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """Accepter une demande : cree l'affectation automatiquement"""
-    commentaire = data.get("commentaire", "") if data else ""
+    try:
+        body = await request.json()
+        commentaire = body.get("commentaire", "") if body else ""
+    except Exception:
+        commentaire = ""
 
     # Recuperer la demande
     demande = sb.table("demandes_affectation").select("*").eq("id", demande_id).execute()
@@ -1276,9 +1280,13 @@ async def accepter_demande(demande_id: str, data: dict = {}, request: Request = 
     return {"message": "Demande acceptee, affectation creee", "affectation_id": aff_id}
 
 @app.put("/admin/demandes/{demande_id}/refuser")
-def refuser_demande(demande_id: str, data: dict = {}, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+async def refuser_demande(demande_id: str, request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """Refuser une demande"""
-    commentaire = data.get("commentaire", "") if data else ""
+    try:
+        body = await request.json()
+        commentaire = body.get("commentaire", "") if body else ""
+    except Exception:
+        commentaire = ""
 
     demande = sb.table("demandes_affectation").select("id, statut").eq("id", demande_id).execute()
     if not demande.data:
