@@ -86,6 +86,9 @@ export default function Admin() {
   // Demandes d'affectation
   const [demandes, setDemandes] = useState([])
 
+  // Mobile sidebar
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
   // Modals
   const [showEnqueteModal, setShowEnqueteModal] = useState(false)
   const [showEnqueteurModal, setShowEnqueteurModal] = useState(false)
@@ -219,8 +222,22 @@ export default function Admin() {
 
   return (
     <div className="h-screen flex overflow-hidden bg-[#F9FAFB]">
+      {/* Backdrop mobile */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black/40 z-40 md:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
       {/* SIDEBAR */}
-      <aside className={`flex-shrink-0 flex flex-col border-r border-[#E5E7EB] bg-white transition-all duration-200 h-full overflow-y-auto ${sidebarCollapsed ? 'w-[68px]' : 'w-[260px]'}`}>
+      <aside className={`
+        fixed inset-y-0 left-0 z-50 md:relative md:z-auto
+        flex-shrink-0 flex flex-col border-r border-[#E5E7EB] bg-white
+        transition-all duration-200 h-full overflow-y-auto
+        ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        ${sidebarCollapsed ? 'md:w-[68px] w-[260px]' : 'w-[260px]'}
+      `}>
         {/* Header */}
         <div className="p-4 border-b border-[#E5E7EB]">
           <div className="flex items-center gap-3">
@@ -268,7 +285,7 @@ export default function Admin() {
             label="Tableau de bord"
             active={view === 'dashboard'}
             collapsed={sidebarCollapsed}
-            onClick={() => setView('dashboard')}
+            onClick={() => { setView('dashboard'); setMobileMenuOpen(false) }}
           />
 
           <NavButton
@@ -276,7 +293,7 @@ export default function Admin() {
             label="Enquetes"
             active={view === 'enquetes'}
             collapsed={sidebarCollapsed}
-            onClick={() => { setView('enquetes'); setSelectedEnquete(null) }}
+            onClick={() => { setView('enquetes'); setSelectedEnquete(null); setMobileMenuOpen(false) }}
             badge={enquetes.length}
           />
 
@@ -285,7 +302,7 @@ export default function Admin() {
             label="Enqueteurs"
             active={view === 'enqueteurs'}
             collapsed={sidebarCollapsed}
-            onClick={() => { setView('enqueteurs'); setSelectedEnqueteur(null) }}
+            onClick={() => { setView('enqueteurs'); setSelectedEnqueteur(null); setMobileMenuOpen(false) }}
             badge={enqueteurs.length}
           />
 
@@ -294,7 +311,7 @@ export default function Admin() {
             label="Mes enquetes"
             active={view === 'mes_enquetes'}
             collapsed={sidebarCollapsed}
-            onClick={() => { setView('mes_enquetes'); setSelectedMyEnquete(null) }}
+            onClick={() => { setView('mes_enquetes'); setSelectedMyEnquete(null); setMobileMenuOpen(false) }}
             badge={adminAffectations.length > 0 ? adminAffectations.length : undefined}
           />
 
@@ -303,7 +320,7 @@ export default function Admin() {
             label="Demandes"
             active={view === 'demandes'}
             collapsed={sidebarCollapsed}
-            onClick={() => setView('demandes')}
+            onClick={() => { setView('demandes'); setMobileMenuOpen(false) }}
             badge={demandes.filter(d => d.statut === 'en_attente').length || undefined}
           />
 
@@ -312,7 +329,7 @@ export default function Admin() {
             label="Mon profil"
             active={view === 'profil'}
             collapsed={sidebarCollapsed}
-            onClick={() => setView('profil')}
+            onClick={() => { setView('profil'); setMobileMenuOpen(false) }}
           />
         </div>
 
@@ -363,7 +380,38 @@ export default function Admin() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto min-w-0">
+        {/* Barre mobile */}
+        <div className="md:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-[#E5E7EB] sticky top-0 z-30">
+          <button
+            onClick={() => setMobileMenuOpen(true)}
+            className="p-2 rounded-lg hover:bg-[#F3F4F6] transition-colors"
+          >
+            <svg className="w-5 h-5 text-[#374151]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#059669] flex items-center justify-center">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M3 3v18h18"/><path d="M18 9l-5 5-4-4-3 3"/>
+              </svg>
+            </div>
+            <span className="font-semibold text-sm text-[#111827]">Marketym Admin</span>
+          </div>
+          {demandes.filter(d => d.statut === 'en_attente').length > 0 && (
+            <button
+              onClick={() => { setView('demandes'); setMobileMenuOpen(false) }}
+              className="ml-auto flex items-center gap-1 px-2 py-1 bg-[#FEF2F2] text-[#DC2626] rounded-full text-xs font-medium"
+            >
+              <span>{demandes.filter(d => d.statut === 'en_attente').length}</span>
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            </button>
+          )}
+        </div>
+
         {loading ? (
           <div className="h-full flex items-center justify-center">
             <Spinner size="lg" />

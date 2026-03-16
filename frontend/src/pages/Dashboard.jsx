@@ -139,7 +139,7 @@ export default function Dashboard() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1">
+          <div className="flex gap-1 overflow-x-auto scrollbar-none -mx-6 px-6 md:mx-0 md:px-0">
             <TabButton
               active={activeTab === 'dashboard'}
               onClick={() => { setActiveTab('dashboard'); setSelectedEnquete(null) }}
@@ -171,7 +171,7 @@ export default function Dashboard() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-6xl mx-auto px-6 py-6">
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
         {activeTab === 'dashboard' && (
           <DashboardTab
             affectations={affectations}
@@ -825,7 +825,7 @@ function ProfilTab({ enqueteur, onUpdate }) {
 
         {isEditing ? (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input
                 label="Prenom"
                 value={formData.prenom}
@@ -848,7 +848,7 @@ function ProfilTab({ enqueteur, onUpdate }) {
               value={formData.telephone}
               onChange={(e) => setFormData({ ...formData, telephone: e.target.value })}
             />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="block text-sm font-medium text-[#374151]">Reseau mobile</label>
                 <select
@@ -893,7 +893,7 @@ function ProfilTab({ enqueteur, onUpdate }) {
               <p className="text-xs text-[#6B7280] mb-1">Email</p>
               <p className="text-sm font-medium text-[#111827]">{enqueteur.email || '---'}</p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <p className="text-xs text-[#6B7280] mb-1">Telephone</p>
                 <p className="text-sm font-medium text-[#111827]">{enqueteur.telephone || '---'}</p>
