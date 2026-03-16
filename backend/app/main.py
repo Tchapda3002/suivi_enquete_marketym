@@ -2255,28 +2255,25 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
         for seg in segmentations.data:
             # Quotas globaux (pourcentage)
             quotas_rows = sb.table("quotas")\
-                .select("id, segment_value, pourcentage")\
+                .select("id, segment_value, objectif")\
                 .eq("segmentation_id", seg["id"])\
                 .is_("affectation_id", "null")\
-                .order("pourcentage", desc=True)\
+                .order("objectif", desc=True)\
                 .execute()
 
             quotas_enriched = []
             total_objectif = 0
             total_valides = 0
             for q in quotas_rows.data:
-                pourcentage = q.get("pourcentage") or 0
-                objectif = int(objectif_total_aff * pourcentage / 100)
+                objectif = q.get("objectif") or 0
                 seg_val = q.get("segment_value", "")
-                seg_norm = seg_val
-                valides_brut = completions_par_segment.get(seg_norm, 0)
+                valides_brut = completions_par_segment.get(seg_val, 0)
                 valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
                 total_objectif += objectif
                 total_valides += valides
                 quotas_enriched.append({
                     "id": q["id"],
                     "segment_value": seg_val,
-                    "pourcentage": pourcentage,
                     "objectif": objectif,
                     "completions": valides
                 })
