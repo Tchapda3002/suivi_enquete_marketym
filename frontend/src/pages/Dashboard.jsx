@@ -986,7 +986,8 @@ function ProfilTab({ enqueteur, onUpdate }) {
    ══════════════════════════════════════════════════════════════════════════════ */
 
 function RejoindreTab({ enqueteur, enquetesDisponibles, affectations, demandes, onDemande }) {
-  const [loading, setLoading] = useState(null) // enquete_id en cours
+  const [subTab, setSubTab] = useState('enquetes')
+  const [loading, setLoading] = useState(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
@@ -1010,17 +1011,107 @@ function RejoindreTab({ enqueteur, enquetesDisponibles, affectations, demandes, 
     }
   }
 
-  const STATUT_LABELS = {
-    en_attente: { label: 'En attente', color: 'bg-yellow-100 text-yellow-700' },
-    acceptee:   { label: 'Acceptee',   color: 'bg-green-100 text-green-700' },
-    refusee:    { label: 'Refusee',    color: 'bg-red-100 text-red-700' },
+  // Partition des enquetes selon statut demande
+  const enquetesDispo = enquetesDisponibles.filter(e => {
+    if (affectationIds.has(e.id)) return false
+    const d = demandeMap[e.id]
+    return !d || d.statut === 'refusee' // pas de demande OU refusee -> peut redemander
+  })
+  const enquetesAcceptees = enquetesDisponibles.filter(e => demandeMap[e.id]?.statut === 'acceptee')
+  const enquetesRefusees = enquetesDisponibles.filter(e => demandeMap[e.id]?.statut === 'refusee')
+  const enquetesEnAttente = enquetesDisponibles.filter(e => demandeMap[e.id]?.statut === 'en_attente')
+
+  // "Enquetes" montre: dispo + en_attente (avec badge bloquant)
+  const enquetesOnglet = [...enquetesDispo, ...enquetesEnAttente].sort((a, b) => a.nom.localeCompare(b.nom))
+
+  function EnqueteCard({ enquete, showAction = true }) {
+    const demande = demandeMap[enquete.id]
+    const isEnAttente = demande?.statut === 'en_attente'
+    const isRefusee = demande?.statut === 'refusee'
+
+    return (
+      <Card className="p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-semibold text-[#111827]">{enquete.nom}</h3>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                enquete.statut === 'en_cours' ? 'bg-blue-100 text-blue-700' :
+                enquete.statut === 'termine' ? 'bg-gray-100 text-gray-600' :
+                'bg-yellow-100 text-yellow-700'
+              }`}>{enquete.statut}</span>
+            </div>
+            {enquete.description && (
+              <p className="text-sm text-[#6B7280] mt-1 truncate">{enquete.description}</p>
+            )}
+            {enquete.cible && (
+              <p className="text-xs text-[#9CA3AF] mt-1">{enquete.cible}</p>
+            )}
+            {demande?.commentaire_admin && (
+              <p className="text-xs text-[#6B7280] mt-2 italic">
+                <span className="font-medium not-italic">Commentaire :</span> {demande.commentaire_admin}
+              </p>
+            )}
+          </div>
+
+          {showAction && (
+            <div className="flex-shrink-0">
+              {isEnAttente ? (
+                <span className="text-xs px-3 py-1.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">En attente</span>
+              ) : (
+                <button
+                  onClick={() => handleDemande(enquete.id)}
+                  disabled={loading === enquete.id}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-[#059669] text-white text-sm font-medium rounded-lg hover:bg-[#047857] disabled:opacity-50 transition-colors"
+                >
+                  {loading === enquete.id ? (
+                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                  ) : (
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16" strokeLinecap="round"/><line x1="8" y1="12" x2="16" y2="12" strokeLinecap="round"/></svg>
+                  )}
+                  {isRefusee ? 'Re-demander' : 'Demander'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </Card>
+    )
   }
+
+  const tabs = [
+    { id: 'enquetes',  label: 'Enquetes',  count: enquetesOnglet.length },
+    { id: 'acceptees', label: 'Acceptees', count: enquetesAcceptees.length },
+    { id: 'refusees',  label: 'Refusees',  count: enquetesRefusees.length },
+  ]
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-[#111827]">Rejoindre une enquete</h2>
         <p className="text-sm text-[#6B7280] mt-1">Faites une demande pour participer a une enquete. L'administrateur devra l'accepter.</p>
+      </div>
+
+      {/* Sous-onglets */}
+      <div className="flex gap-2 border-b border-[#E5E7EB]">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setSubTab(t.id)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              subTab === t.id
+                ? 'border-[#059669] text-[#059669]'
+                : 'border-transparent text-[#6B7280] hover:text-[#374151]'
+            }`}
+          >
+            {t.label}
+            {t.count > 0 && (
+              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${
+                subTab === t.id ? 'bg-[#D1FAE5] text-[#059669]' : 'bg-[#F3F4F6] text-[#6B7280]'
+              }`}>{t.count}</span>
+            )}
+          </button>
+        ))}
       </div>
 
       {success && (
@@ -1031,67 +1122,39 @@ function RejoindreTab({ enqueteur, enquetesDisponibles, affectations, demandes, 
       )}
 
       <div className="grid gap-4">
-        {enquetesDisponibles.length === 0 && (
-          <Card className="p-8 text-center text-[#6B7280]">Aucune enquete disponible</Card>
+        {subTab === 'enquetes' && (
+          enquetesOnglet.length === 0
+            ? <Card className="p-8 text-center text-[#6B7280]">Aucune enquete disponible</Card>
+            : enquetesOnglet.map(e => <EnqueteCard key={e.id} enquete={e} />)
         )}
-        {enquetesDisponibles.map(enquete => {
-          const isAffecte = affectationIds.has(enquete.id)
-          const demande = demandeMap[enquete.id]
-
-          return (
-            <Card key={enquete.id} className="p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-semibold text-[#111827]">{enquete.nom}</h3>
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                      enquete.statut === 'en_cours' ? 'bg-blue-100 text-blue-700' :
-                      enquete.statut === 'termine' ? 'bg-gray-100 text-gray-600' :
-                      'bg-yellow-100 text-yellow-700'
-                    }`}>{enquete.statut}</span>
-                  </div>
-                  {enquete.description && (
-                    <p className="text-sm text-[#6B7280] mt-1 truncate">{enquete.description}</p>
-                  )}
-                  {enquete.cible && (
-                    <p className="text-xs text-[#9CA3AF] mt-1">{enquete.cible}</p>
-                  )}
-                </div>
-
-                <div className="flex-shrink-0">
-                  {isAffecte ? (
-                    <span className="text-xs px-3 py-1.5 rounded-full bg-green-100 text-green-700 font-medium">Deja affecte</span>
-                  ) : demande ? (
-                    <span className={`text-xs px-3 py-1.5 rounded-full font-medium ${STATUT_LABELS[demande.statut]?.color}`}>
-                      {STATUT_LABELS[demande.statut]?.label}
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => handleDemande(enquete.id)}
-                      disabled={loading === enquete.id}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-[#059669] text-white text-sm font-medium rounded-lg hover:bg-[#047857] disabled:opacity-50 transition-colors"
-                    >
-                      {loading === enquete.id ? (
-                        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                      ) : (
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16" strokeLinecap="round"/><line x1="8" y1="12" x2="16" y2="12" strokeLinecap="round"/></svg>
+        {subTab === 'acceptees' && (
+          enquetesAcceptees.length === 0
+            ? <Card className="p-8 text-center text-[#6B7280]">Aucune demande acceptee</Card>
+            : enquetesAcceptees.map(e => (
+                <Card key={e.id} className="p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-semibold text-[#111827]">{e.nom}</h3>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">{e.statut}</span>
+                      </div>
+                      {e.description && <p className="text-sm text-[#6B7280] mt-1 truncate">{e.description}</p>}
+                      {demandeMap[e.id]?.commentaire_admin && (
+                        <p className="text-xs text-[#6B7280] mt-2 italic">
+                          <span className="font-medium not-italic">Commentaire :</span> {demandeMap[e.id].commentaire_admin}
+                        </p>
                       )}
-                      Demander
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {demande?.commentaire_admin && (
-                <div className="mt-3 pt-3 border-t border-[#F3F4F6]">
-                  <p className="text-xs text-[#6B7280]">
-                    <span className="font-medium">Commentaire admin :</span> {demande.commentaire_admin}
-                  </p>
-                </div>
-              )}
-            </Card>
-          )
-        })}
+                    </div>
+                    <span className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full bg-green-100 text-green-700 font-medium">Acceptee</span>
+                  </div>
+                </Card>
+              ))
+        )}
+        {subTab === 'refusees' && (
+          enquetesRefusees.length === 0
+            ? <Card className="p-8 text-center text-[#6B7280]">Aucune demande refusee</Card>
+            : enquetesRefusees.map(e => <EnqueteCard key={e.id} enquete={e} />)
+        )}
       </div>
     </div>
   )
