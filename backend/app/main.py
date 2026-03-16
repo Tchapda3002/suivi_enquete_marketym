@@ -1275,7 +1275,7 @@ async def accepter_demande(demande_id: str, request: Request, admin: dict = Depe
         "objectif_total": 0,
         "completions_total": 0,
         "clics": 0,
-        "statut": "actif"
+        "statut": "en_cours"
     }).execute()
 
     if not aff_result.data:
