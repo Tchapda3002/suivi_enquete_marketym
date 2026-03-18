@@ -262,7 +262,7 @@ export default function Admin() {
             <div className="grid grid-cols-2 gap-2">
               <div className="p-3 rounded-lg bg-[#F9FAFB]">
                 <p className="text-lg font-bold text-[#111827]">{dashboard.total_valides}</p>
-                <p className="text-[10px] text-[#9CA3AF]">Completions</p>
+                <p className="text-[10px] text-[#9CA3AF]">Questionnaires complétés</p>
               </div>
               <div className="p-3 rounded-lg bg-[#ECFDF5]">
                 <p className="text-lg font-bold text-[#059669]">{dashboard.taux_completion}%</p>
@@ -1133,7 +1133,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
       {/* KPIs - adaptes au filtre */}
       {statutFilter === 'all' && selectedEnqueteIds.length === 0 ? (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-          <KPICard label="Completions" value={dashboard?.total_valides || 0} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
+          <KPICard label="Questionnaires complétés" value={dashboard?.total_valides || 0} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
           <KPICard label="Echantillon" value={dashboard?.total_objectif || 0} icon={<TargetIcon />} color="#2563EB" bgColor="#EFF6FF" />
           <KPICard label="Conversion" value={`${tauxConversionGlobal}%`} icon={<ChartIcon />} color="#7C3AED" bgColor="#F5F3FF" />
           <KPICard label="Clics" value={dashboard?.total_clics || 0} icon={<ClickIcon />} color="#D97706" bgColor="#FFFBEB" />
@@ -1141,7 +1141,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <KPICard label="Enquetes" value={filteredEnquetes.length} icon={<ClipboardIcon />} color="#2563EB" bgColor="#EFF6FF" />
-          <KPICard label="Completions" value={filteredTotalValides} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
+          <KPICard label="Questionnaires complétés" value={filteredTotalValides} icon={<CheckIcon />} color="#059669" bgColor="#ECFDF5" />
           <KPICard label="Echantillon" value={filteredTotalObjectif} icon={<TargetIcon />} color="#7C3AED" bgColor="#F5F3FF" />
           <KPICard label="Conversion" value={`${filteredTauxConversion}%`} icon={<ChartIcon />} color="#D97706" bgColor="#FFFBEB" />
           <KPICard label="Clics" value={filteredTotalClics} icon={<ClickIcon />} color="#6B7280" bgColor="#F3F4F6" />
@@ -1184,7 +1184,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
             <p className="text-5xl font-bold text-[#059669]">
               {displayHistorique.reduce((sum, d) => sum + (d.completions || 0), 0)}
             </p>
-            <p className="text-sm text-[#6B7280] mt-2">completions collectées</p>
+            <p className="text-sm text-[#6B7280] mt-2">questionnaires complétés</p>
             <p className="text-xs text-[#9CA3AF] mt-1">
               {dateRange?.from_date} → {dateRange?.to_date}
             </p>
@@ -1291,7 +1291,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
               <tr className="border-b border-[#E5E7EB]">
                 <th className="text-left py-2 px-4 text-[10px] font-semibold text-[#6B7280] uppercase">#</th>
                 <SortableHeader label="Enqueteur" k="nom" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} className="py-2" />
-                <SortableHeader label="Completions" k="valides" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} align="center" className="py-2" />
+                <SortableHeader label="Questionnaires complétés" k="valides" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} align="center" className="py-2" />
                 <SortableHeader label="Progression" k="pct" sortKey={topSort.sortKey} sortDir={topSort.sortDir} onSort={topSort.toggleSort} className="py-2" />
               </tr>
             </thead>
@@ -1518,7 +1518,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
           </div>
           <div className="p-4 rounded-xl bg-[#ECFDF5]">
             <p className="text-xl font-bold text-[#059669]">{totalCompletions}</p>
-            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Completions</p>
+            <p className="text-[10px] font-medium uppercase text-[#059669] opacity-70">Questionnaires complétés</p>
           </div>
           <div className="p-4 rounded-xl bg-[#F5F3FF]">
             <p className="text-xl font-bold text-[#7C3AED]">{pct}%</p>
@@ -1576,7 +1576,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                     <tr className="bg-[#F9FAFB] border-b border-[#E5E7EB]">
                       <SortableHeader label="Enqueteur" k="nom" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} />
                       <SortableHeader label="Clics" k="clics" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
-                      <SortableHeader label="Completions" k="valides" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
+                      <SortableHeader label="Questionnaires complétés" k="valides" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
                       <SortableHeader label="Progression" k="pct" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} />
                       <SortableHeader label="Statut" k="statut" sortKey={affSort.sortKey} sortDir={affSort.sortDir} onSort={affSort.toggleSort} align="center" />
                       <th className="px-4 py-3"></th>
@@ -1880,7 +1880,7 @@ function QuotaConfigCard({ config, onDelete }) {
                   ))}
                   <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">%</th>
                   <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Objectif</th>
-                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Completions</th>
+                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Complétés</th>
                   <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Progression</th>
                 </tr>
               </thead>
@@ -2555,7 +2555,7 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
               <SortableHeader label="Enqueteur" k="nom" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
               <SortableHeader label="Contact" k="email" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
               <SortableHeader label="Enquetes" k="nb_enquetes" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
-              <SortableHeader label="Completions" k="valides" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
+              <SortableHeader label="Questionnaires complétés" k="valides" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
               <SortableHeader label="Progression" k="pct" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} />
               <SortableHeader label="Connexion" k="connexion" sortKey={enqSort.sortKey} sortDir={enqSort.sortDir} onSort={enqSort.toggleSort} align="center" />
               <th className="px-4 py-3"></th>
@@ -2735,7 +2735,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
               <Card className="p-4">
                 <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
-                <p className="text-xs text-[#6B7280]">Completions <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
+                <p className="text-xs text-[#6B7280]">Questionnaires complétés <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
               </Card>
               <Card className="p-4">
                 <p className="text-2xl font-bold text-[#2563EB]">{totalObjectif}</p>
@@ -2884,7 +2884,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
                   <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-[#E5E7EB]">
                     <div className="text-center">
                       <p className="text-lg font-bold text-[#059669]">{completions}</p>
-                      <p className="text-[10px] text-[#6B7280]">Complet.</p>
+                      <p className="text-[10px] text-[#6B7280]">Complétés</p>
                     </div>
                     <div className="text-center">
                       <p className="text-lg font-bold text-[#0891B2]">{aff.demarre_total || 0}</p>
@@ -3742,7 +3742,7 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
                 <div className="grid grid-cols-4 gap-2 mb-3">
                   <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
                     <p className="text-base font-bold text-[#059669]">{completions}</p>
-                    <p className="text-[10px] text-[#059669]">Complet.</p>
+                    <p className="text-[10px] text-[#059669]">Complétés</p>
                   </div>
                   <div className="p-2 rounded-lg bg-[#ECFEFF] text-center">
                     <p className="text-base font-bold text-[#0891B2]">{aff.demarre_total || 0}</p>
@@ -3770,7 +3770,7 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <Card className="p-4">
               <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
-              <p className="text-xs text-[#6B7280]">Completions <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
+              <p className="text-xs text-[#6B7280]">Questionnaires complétés <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
             </Card>
             <Card className="p-4">
               <p className="text-2xl font-bold text-[#2563EB]">{totalObjectif}</p>
@@ -3899,7 +3899,7 @@ function MyEnqueteDetailView({ affectation, onBack }) {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#059669]">{completions}</p>
-          <p className="text-xs text-[#6B7280]">Completions <span className="text-[#9CA3AF]">/ {affectation.objectif_total}</span></p>
+          <p className="text-xs text-[#6B7280]">Questionnaires complétés <span className="text-[#9CA3AF]">/ {affectation.objectif_total}</span></p>
         </Card>
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#2563EB]">{affectation.objectif_total}</p>
