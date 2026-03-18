@@ -1717,12 +1717,16 @@ async def sync_all(admin: dict = Depends(require_admin), sb: Client = Depends(ge
     # Ne synchroniser que les affectations des enquetes en cours
     affectations = sb.table("affectations").select("id, survey_id, enquete_id, enquetes!inner(statut)").eq("enquetes.statut", "en_cours").execute()
 
+    # Cache partage : chaque survey n'est telecharge qu'une seule fois pour tout le sync
+    responses_cache: dict = {}
+    cache_lock = asyncio.Lock()
+
     # Executer les syncs en parallele (max 5 a la fois pour eviter de surcharger l'API)
     semaphore = asyncio.Semaphore(5)
 
     async def sync_with_limit(aff):
         async with semaphore:
-            return await sync_affectation(aff["id"], aff["survey_id"], sb)
+            return await sync_affectation(aff["id"], aff["survey_id"], sb, responses_cache, cache_lock)
 
     tasks = [sync_with_limit(aff) for aff in affectations.data]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1746,8 +1750,19 @@ async def sync_one(affectation_id: str, admin: dict = Depends(require_admin), sb
 
     return await sync_affectation(aff.data[0]["id"], aff.data[0]["survey_id"], sb)
 
-async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> dict:
+async def sync_affectation(affectation_id: str, survey_id: str, sb: Client, responses_cache: dict = None, cache_lock=None) -> dict:
     """Synchroniser une affectation avec les donnees QuestionPro"""
+
+    async def _fetch(sid):
+        """fetch avec cache partage — chaque survey n'est telecharge qu'une seule fois"""
+        sid = str(sid)
+        if responses_cache is None:
+            return await fetch_survey_responses(sid)
+        if sid not in responses_cache:
+            async with cache_lock:
+                if sid not in responses_cache:
+                    responses_cache[sid] = await fetch_survey_responses(sid)
+        return responses_cache[sid]
 
     # 1. Recuperer les infos completes de l'affectation
     aff_info = sb.table("affectations")\
@@ -1789,7 +1804,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         if not sid or not token:
             return
         try:
-            resps = await fetch_survey_responses(sid)
+            resps = await _fetch(sid)
             for r in resps:
                 rid = str(r.get("responseID") or r.get("responseId") or "")
                 if rid in seen_response_ids:
@@ -1807,7 +1822,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         if not sid:
             return
         try:
-            resps = await fetch_survey_responses(sid)
+            resps = await _fetch(sid)
             for r in resps:
                 rid = str(r.get("responseID") or r.get("responseId") or "")
                 if rid not in seen_response_ids:
@@ -1821,7 +1836,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         if not sid:
             return
         try:
-            resps = await fetch_survey_responses(sid)
+            resps = await _fetch(sid)
             for r in resps:
                 rid = str(r.get("responseID") or r.get("responseId") or "")
                 if rid in seen_response_ids:
