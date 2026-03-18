@@ -1751,7 +1751,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
 
     # 1. Recuperer les infos completes de l'affectation
     aff_info = sb.table("affectations")\
-        .select("id, enquete_id, survey_id, enqueteur_id, enqueteurs(token), enquetes(survey_id, survey_ids_historique, segmentation_question_id)")\
+        .select("id, enquete_id, survey_id, enqueteur_id, enqueteurs(token, identifiant), enquetes(survey_id, survey_ids_historique, segmentation_question_id)")\
         .eq("id", affectation_id)\
         .execute()
 
@@ -1766,12 +1766,15 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
     survey_id_enquete = enquete.get("survey_id")
     survey_ids_historique = enquete.get("survey_ids_historique") or []
     enqueteur_token = enqueteur.get("token")
+    enqueteur_identifiant = enqueteur.get("identifiant", "")
     segmentation_question_id = enquete.get("segmentation_question_id")
     enquete_id = aff.get("enquete_id")
     enqueteur_id = aff.get("enqueteur_id")
 
     # 2. Determiner si l'affectation a un survey individuel
     is_ancien_systeme = survey_id_affectation and survey_id_enquete and str(survey_id_affectation) != str(survey_id_enquete)
+    # Marketym recoit aussi les reponses sans custom1 connu (fourre-tout)
+    is_fourre_tout = enqueteur_identifiant == "usr00015"
 
     # survey cible pour les segmentations/questions
     target_survey_id = survey_id_enquete or survey_id_affectation
@@ -1813,16 +1816,50 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client) -> d
         except Exception as e:
             print(f"[sync] Erreur fetch survey individuel {sid}: {e}")
 
+    async def add_responses_fourre_tout(sid, known_tokens):
+        """Fetch depuis un survey : token Marketym + reponses sans token connu"""
+        if not sid:
+            return
+        try:
+            resps = await fetch_survey_responses(sid)
+            for r in resps:
+                rid = str(r.get("responseID") or r.get("responseId") or "")
+                if rid in seen_response_ids:
+                    continue
+                custom1 = r.get("customVariables", {}).get("custom1", "")
+                # Inclure si : token Marketym OU custom1 absent OU token inconnu
+                if custom1 == enqueteur_token or custom1 not in known_tokens:
+                    seen_response_ids.add(rid)
+                    source_responses.append(r)
+        except Exception as e:
+            print(f"[sync] Erreur fetch fourre-tout {sid}: {e}")
+
     # Source 1 : survey individuel (si applicable) — toutes les reponses lui appartiennent
     if is_ancien_systeme:
         await add_responses_all(survey_id_affectation)
 
-    # Source 2 : survey actuel de l'enquete filtre par token
-    await add_responses_filtered(survey_id_enquete, enqueteur_token)
-
-    # Source 3 : anciens surveys de l'enquete (historique) filtres par token
-    for old_sid in survey_ids_historique:
-        await add_responses_filtered(str(old_sid), enqueteur_token)
+    if is_fourre_tout:
+        # Recuperer tous les tokens des autres enqueteurs de cette enquete
+        all_aff_tokens_res = sb.table("affectations")\
+            .select("enqueteurs(token)")\
+            .eq("enquete_id", enquete_id)\
+            .neq("enqueteur_id", enqueteur_id)\
+            .execute()
+        known_tokens = set()
+        for a in (all_aff_tokens_res.data or []):
+            t = (a.get("enqueteurs") or {}).get("token")
+            if t:
+                known_tokens.add(t)
+        # Source 2 + 3 : fourre-tout (token Marketym + reponses sans token connu)
+        await add_responses_fourre_tout(survey_id_enquete, known_tokens)
+        for old_sid in survey_ids_historique:
+            await add_responses_fourre_tout(str(old_sid), known_tokens)
+    else:
+        # Source 2 : survey actuel de l'enquete filtre par token
+        await add_responses_filtered(survey_id_enquete, enqueteur_token)
+        # Source 3 : anciens surveys de l'enquete (historique) filtres par token
+        for old_sid in survey_ids_historique:
+            await add_responses_filtered(str(old_sid), enqueteur_token)
 
     enqueteur_responses = [r for r in source_responses if r.get("responseStatus") == "Completed"]
 
