@@ -77,6 +77,7 @@ export default function Dashboard() {
   const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
   const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
+  const totalDemarre = affectations.reduce((s, a) => s + (a.demarre_total || 0), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
   const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
 
@@ -178,6 +179,7 @@ export default function Dashboard() {
             totalCompletions={totalCompletions}
             totalObjectif={totalObjectif}
             totalClics={totalClics}
+            totalDemarre={totalDemarre}
             globalPct={globalPct}
             conversionRate={conversionRate}
             segmentations={segmentations}
@@ -300,7 +302,7 @@ function TabButton({ active, onClick, icon, label, badge }) {
    DASHBOARD TAB
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
+function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, totalDemarre, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
   const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
 
   return (
@@ -314,8 +316,9 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <KPICard label="Completions" value={totalCompletions} subValue={`/ ${totalObjectif}`} color="#059669" />
         <KPICard label="Objectif" value={totalObjectif} subValue="reponses" color="#2563EB" />
-        <KPICard label="Clics" value={totalClics} subValue="ouvertures" color="#7C3AED" />
-        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
+        <KPICard label="Clics" value={totalClics} subValue="ouvertures uniques" color="#7C3AED" />
+        <KPICard label="Demarres" value={totalDemarre} subValue="ont commence" color="#0891B2" />
+        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="clic→complet" color="#D97706" />
       </div>
 
       {/* Progression globale + Courbe */}
@@ -504,18 +507,22 @@ function EnquetesTab({ affectations, onSelect }) {
               </div>
 
               {/* Mini Stats */}
-              <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="grid grid-cols-4 gap-2 mb-3">
                 <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
-                  <p className="text-lg font-bold text-[#059669]">{completions}</p>
-                  <p className="text-[10px] text-[#059669]">Completions</p>
+                  <p className="text-base font-bold text-[#059669]">{completions}</p>
+                  <p className="text-[10px] text-[#059669]">Complet.</p>
+                </div>
+                <div className="p-2 rounded-lg bg-[#ECFEFF] text-center">
+                  <p className="text-base font-bold text-[#0891B2]">{aff.demarre_total || 0}</p>
+                  <p className="text-[10px] text-[#0891B2]">Demarres</p>
                 </div>
                 <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
-                  <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
+                  <p className="text-base font-bold text-[#7C3AED]">{aff.clics || 0}</p>
                   <p className="text-[10px] text-[#7C3AED]">Clics</p>
                 </div>
                 <div className="p-2 rounded-lg bg-[#FFFBEB] text-center">
-                  <p className="text-lg font-bold text-[#D97706]">{conversionRate}%</p>
-                  <p className="text-[10px] text-[#D97706]">Conversion</p>
+                  <p className="text-base font-bold text-[#D97706]">{conversionRate}%</p>
+                  <p className="text-[10px] text-[#D97706]">Conv.</p>
                 </div>
               </div>
 
@@ -585,8 +592,9 @@ function EnqueteDetail({ affectation, segmentations, onBack }) {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <KPICard label="Completions" value={completions} subValue={`/ ${affectation.objectif_total}`} color="#059669" />
         <KPICard label="Objectif" value={affectation.objectif_total} subValue="reponses" color="#2563EB" />
-        <KPICard label="Clics" value={affectation.clics || 0} subValue="ouvertures" color="#7C3AED" />
-        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="taux" color="#D97706" />
+        <KPICard label="Clics" value={affectation.clics || 0} subValue="ouvertures uniques" color="#7C3AED" />
+        <KPICard label="Demarres" value={affectation.demarre_total || 0} subValue="ont commence" color="#0891B2" />
+        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="clic→complet" color="#D97706" />
       </div>
 
       {/* Progress */}

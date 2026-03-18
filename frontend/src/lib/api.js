@@ -289,8 +289,8 @@ export const getDemandesEnqueteur = (enqueteurId) =>
 export const getDemandesAdmin = (statut = null) =>
   API.get('/admin/demandes', { params: statut ? { statut } : {} }).then(r => r.data)
 
-export const accepterDemande = (demandeId, commentaire = '') =>
-  API.put(`/admin/demandes/${demandeId}/accepter`, { commentaire }).then(r => r.data)
+export const accepterDemande = (demandeId, commentaire = '', objectif_total = 0) =>
+  API.put(`/admin/demandes/${demandeId}/accepter`, { commentaire, objectif_total }).then(r => r.data)
 
 export const refuserDemande = (demandeId, commentaire = '') =>
   API.put(`/admin/demandes/${demandeId}/refuser`, { commentaire }).then(r => r.data)

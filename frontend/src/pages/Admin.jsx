@@ -489,8 +489,8 @@ export default function Admin() {
         ) : view === 'demandes' ? (
           <DemandesView
             demandes={demandes}
-            onAccepter={async (id, commentaire) => {
-              await accepterDemande(id, commentaire)
+            onAccepter={async (id, commentaire, objectif) => {
+              await accepterDemande(id, commentaire, objectif)
               const updated = await getDemandesAdmin()
               setDemandes(updated || [])
               await loadAll()
@@ -2259,7 +2259,7 @@ function AddSegmentationModal({ questions, loading, onClose, onSave }) {
     const q = questions.find(x => x.id === qId)
     setForm({ question_id: qId, question_text: q?.text || '', nom: '' })
     if (q?.answers?.length > 0) {
-      setQuotas(q.answers.map(a => ({ text: a.text, pourcentage: 0 })))
+      setQuotas(q.answers.map(a => ({ id: a.id, text: a.text, pourcentage: 0 })))
       setModeManuel(false)
     } else {
       setQuotas([])
@@ -2652,23 +2652,25 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
   async function loadDetails() {
     setLoading(true)
     try {
-      const [data, segs, hist] = await Promise.all([
+      const [data, segs, hist] = await Promise.allSettled([
         getEnqueteur(enqueteur.id),
         getEnqueteurSegmentations(enqueteur.id),
         getHistoriqueEnqueteur(enqueteur.id)
       ])
-      setDetails(data)
-      setSegmentations(segs || [])
-      setHistorique(hist || [])
+      if (data.status === 'fulfilled') setDetails(data.value)
+      if (segs.status === 'fulfilled') setSegmentations(segs.value || [])
+      if (hist.status === 'fulfilled') setHistorique(hist.value || [])
     } finally { setLoading(false) }
   }
 
   if (loading) return <div className="h-full flex items-center justify-center"><Spinner size="lg" /></div>
+  if (!details) return <div className="h-full flex items-center justify-center text-sm text-[#6B7280]">Erreur de chargement des donnees</div>
 
   const affectations = details?.affectations || []
   const totalCompletions = affectations.reduce((s, a) => s + (a.completions_valides ?? a.completions_total ?? 0), 0)
   const totalObjectif = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
   const totalClics = affectations.reduce((s, a) => s + (a.clics || 0), 0)
+  const totalDemarre = affectations.reduce((s, a) => s + (a.demarre_total || 0), 0)
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
   const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
 
@@ -2730,7 +2732,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
         {activeTab === 'dashboard' ? (
           <>
             {/* KPIs */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
               <Card className="p-4">
                 <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
                 <p className="text-xs text-[#6B7280]">Completions <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
@@ -2741,7 +2743,11 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
               </Card>
               <Card className="p-4">
                 <p className="text-2xl font-bold text-[#7C3AED]">{totalClics}</p>
-                <p className="text-xs text-[#6B7280]">Clics</p>
+                <p className="text-xs text-[#6B7280]">Clics uniques</p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-2xl font-bold text-[#0891B2]">{totalDemarre}</p>
+                <p className="text-xs text-[#6B7280]">Demarres</p>
               </Card>
               <Card className="p-4">
                 <p className="text-2xl font-bold text-[#D97706]">{conversionRate}%</p>
@@ -2875,10 +2881,14 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
                     </div>
                   </div>
                   <ProgressBar value={completions} max={aff.objectif_total} size="md" />
-                  <div className="grid grid-cols-3 gap-3 mt-4 pt-3 border-t border-[#E5E7EB]">
+                  <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-[#E5E7EB]">
                     <div className="text-center">
                       <p className="text-lg font-bold text-[#059669]">{completions}</p>
-                      <p className="text-[10px] text-[#6B7280]">Completions</p>
+                      <p className="text-[10px] text-[#6B7280]">Complet.</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-lg font-bold text-[#0891B2]">{aff.demarre_total || 0}</p>
+                      <p className="text-[10px] text-[#6B7280]">Demarres</p>
                     </div>
                     <div className="text-center">
                       <p className="text-lg font-bold text-[#7C3AED]">{aff.clics || 0}</p>
@@ -2886,7 +2896,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
                     </div>
                     <div className="text-center">
                       <p className="text-lg font-bold text-[#D97706]">{convRate}%</p>
-                      <p className="text-[10px] text-[#6B7280]">Conversion</p>
+                      <p className="text-[10px] text-[#6B7280]">Conv.</p>
                     </div>
                   </div>
                 </Card>
@@ -3729,18 +3739,22 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
                 </div>
 
                 {/* Mini Stats */}
-                <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="grid grid-cols-4 gap-2 mb-3">
                   <div className="p-2 rounded-lg bg-[#ECFDF5] text-center">
-                    <p className="text-lg font-bold text-[#059669]">{completions}</p>
-                    <p className="text-[10px] text-[#059669]">Completions</p>
+                    <p className="text-base font-bold text-[#059669]">{completions}</p>
+                    <p className="text-[10px] text-[#059669]">Complet.</p>
+                  </div>
+                  <div className="p-2 rounded-lg bg-[#ECFEFF] text-center">
+                    <p className="text-base font-bold text-[#0891B2]">{aff.demarre_total || 0}</p>
+                    <p className="text-[10px] text-[#0891B2]">Demarres</p>
                   </div>
                   <div className="p-2 rounded-lg bg-[#F5F3FF] text-center">
-                    <p className="text-lg font-bold text-[#7C3AED]">{aff.clics}</p>
+                    <p className="text-base font-bold text-[#7C3AED]">{aff.clics || 0}</p>
                     <p className="text-[10px] text-[#7C3AED]">Clics</p>
                   </div>
                   <div className="p-2 rounded-lg bg-[#FFFBEB] text-center">
-                    <p className="text-lg font-bold text-[#D97706]">{convRate}%</p>
-                    <p className="text-[10px] text-[#D97706]">Conversion</p>
+                    <p className="text-base font-bold text-[#D97706]">{convRate}%</p>
+                    <p className="text-[10px] text-[#D97706]">Conv.</p>
                   </div>
                 </div>
 
@@ -3893,7 +3907,11 @@ function MyEnqueteDetailView({ affectation, onBack }) {
         </Card>
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#7C3AED]">{affectation.clics || 0}</p>
-          <p className="text-xs text-[#6B7280]">Clics</p>
+          <p className="text-xs text-[#6B7280]">Clics uniques</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold text-[#0891B2]">{affectation.demarre_total || 0}</p>
+          <p className="text-xs text-[#6B7280]">Demarres</p>
         </Card>
         <Card className="p-4">
           <p className="text-2xl font-bold text-[#D97706]">{conversionRate}%</p>
@@ -4019,6 +4037,7 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
   const [loadingId, setLoadingId] = useState(null)
   const [bulkLoading, setBulkLoading] = useState(false)
   const [commentaire, setCommentaire] = useState('')
+  const [objectif, setObjectif] = useState('')
   const [showCommentModal, setShowCommentModal] = useState(null) // {ids: [], action}
   const [selection, setSelection] = useState(new Set())
 
@@ -4059,10 +4078,11 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
     isBulk ? setBulkLoading(true) : setLoadingId(ids[0])
     try {
       await Promise.all(ids.map(id =>
-        action === 'accepter' ? onAccepter(id, commentaire) : onRefuser(id, commentaire)
+        action === 'accepter' ? onAccepter(id, commentaire, parseInt(objectif) || 0) : onRefuser(id, commentaire)
       ))
       setShowCommentModal(null)
       setCommentaire('')
+      setObjectif('')
       setSelection(new Set())
     } catch (e) {
       alert(e?.response?.data?.detail || 'Erreur')
@@ -4228,14 +4248,24 @@ function DemandesView({ demandes, onAccepter, onRefuser }) {
           title={showCommentModal.action === 'accepter'
             ? `Accepter ${showCommentModal.ids.length > 1 ? `${showCommentModal.ids.length} demandes` : 'la demande'}`
             : `Refuser ${showCommentModal.ids.length > 1 ? `${showCommentModal.ids.length} demandes` : 'la demande'}`}
-          onClose={() => { setShowCommentModal(null); setCommentaire('') }}
+          onClose={() => { setShowCommentModal(null); setCommentaire(''); setObjectif('') }}
         >
           <div className="space-y-4">
             <p className="text-sm text-[#6B7280]">
               {showCommentModal.action === 'accepter'
-                ? `${showCommentModal.ids.length > 1 ? `${showCommentModal.ids.length} affectations seront creees` : "L'affectation sera creee"}. Commentaire optionnel.`
+                ? `${showCommentModal.ids.length > 1 ? `${showCommentModal.ids.length} affectations seront creees` : "L'affectation sera creee"}.`
                 : "Indiquez optionnellement la raison du refus."}
             </p>
+            {showCommentModal.action === 'accepter' && (
+              <Input
+                label="Objectif (nombre de completions)"
+                type="number"
+                min="0"
+                placeholder="ex: 50"
+                value={objectif}
+                onChange={e => setObjectif(e.target.value)}
+              />
+            )}
             <Input
               label="Commentaire (optionnel)"
               placeholder="..."
