@@ -5,8 +5,11 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import httpx
 import json
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from supabase import create_client, Client
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Configuration centralisee
 from .config import settings
@@ -14,7 +17,46 @@ from .config import settings
 # Module d'authentification
 from .auth import auth_router, require_admin, require_super_admin, get_current_user
 
-app = FastAPI(title="Suivi Enqueteurs API v5")
+# ══════════════════════════════════════════════════════════════════════════════
+# SCHEDULER - Sync automatique periodique
+# ══════════════════════════════════════════════════════════════════════════════
+
+scheduler = AsyncIOScheduler(timezone="UTC")
+
+async def run_auto_sync():
+    """Synchronisation automatique de toutes les affectations en cours"""
+    try:
+        sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        affectations = sb.table("affectations")\
+            .select("id, survey_id, enquete_id, enquetes!inner(statut)")\
+            .eq("enquetes.statut", "en_cours")\
+            .execute()
+        if not affectations.data:
+            return
+        responses_cache: dict = {}
+        cache_lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(3)
+
+        async def _sync(aff):
+            async with semaphore:
+                return await sync_affectation(aff["id"], aff["survey_id"], sb, responses_cache, cache_lock)
+
+        results = await asyncio.gather(*[_sync(a) for a in affectations.data], return_exceptions=True)
+        ok = sum(1 for r in results if not isinstance(r, Exception))
+        print(f"[auto-sync] {ok}/{len(results)} OK — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
+    except Exception as e:
+        print(f"[auto-sync] Erreur: {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    interval = getattr(settings, "SYNC_INTERVAL_MINUTES", 30)
+    scheduler.add_job(run_auto_sync, "interval", minutes=interval, id="auto_sync", replace_existing=True)
+    scheduler.start()
+    print(f"[scheduler] Sync auto toutes les {interval} min")
+    yield
+    scheduler.shutdown()
+
+app = FastAPI(title="Suivi Enqueteurs API v5", lifespan=lifespan)
 
 # CORS - ouvert a toutes les origines (auth via Bearer token, pas de cookies)
 app.add_middleware(
@@ -26,6 +68,18 @@ app.add_middleware(
 )
 
 CORS_HEADERS = {"Access-Control-Allow-Origin": "*"}
+
+@app.get("/health")
+def health():
+    """Keep-alive + healthcheck"""
+    next_sync = None
+    try:
+        job = scheduler.get_job("auto_sync")
+        if job and job.next_run_time:
+            next_sync = job.next_run_time.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        pass
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat(), "next_sync": next_sync}
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

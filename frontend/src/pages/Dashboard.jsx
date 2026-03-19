@@ -46,7 +46,7 @@ export default function Dashboard() {
       if (enquetes.status === 'fulfilled') setEnquetesDisponibles(enquetes.value || [])
     }
     refresh()
-    const interval = setInterval(refresh, 30000)
+    const interval = setInterval(refresh, 2 * 60 * 1000)
     return () => clearInterval(interval)
   }, [nav])
 

@@ -103,6 +103,9 @@ export default function Admin() {
     if (!user.is_admin) return nav('/dashboard')
     setAdminUser(user)
     loadAll(user.id)
+    // Auto-refresh toutes les 5 minutes
+    const interval = setInterval(() => loadAll(user.id), 5 * 60 * 1000)
+    return () => clearInterval(interval)
   }, [nav])
 
   async function loadAll(adminId, range) {
