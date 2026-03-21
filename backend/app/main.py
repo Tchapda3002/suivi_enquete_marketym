@@ -302,10 +302,18 @@ async def fetch_survey_responses(survey_id: str, page: int = 1, per_page: int = 
         return data.get("response", [])
 
 def normalize_segment_value(text: str) -> str:
-    """Normaliser la valeur d'un segment: apostrophes curly->droites, espaces insecables->espaces."""
+    """Normaliser la valeur d'un segment: apostrophes curly->droites, espaces insecables->espaces, alias pays."""
     if not text:
         return text
-    return text.replace('\u2019', "'").replace('\u2018', "'").replace('\u00a0', ' ').strip()
+    t = text.replace('\u2019', "'").replace('\u2018', "'").replace('\u00a0', ' ').strip()
+    # Alias pays: variantes de noms retournes par QuestionPro
+    _ALIASES = {
+        "République du Congo": "Congo-Brazzaville",
+        "Republique du Congo": "Congo-Brazzaville",
+        "Guinée Bissau": "Guinée-Bissau",
+        "Guinee Bissau": "Guinée-Bissau",
+    }
+    return _ALIASES.get(t, t)
 
 def extract_segment_value_from_response(response: dict, question_id: str, answer_id_map: dict = None) -> str:
     """Extraire la valeur d'un segment d'une reponse QuestionPro.
