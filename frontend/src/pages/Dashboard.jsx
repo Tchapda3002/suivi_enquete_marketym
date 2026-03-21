@@ -335,7 +335,7 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
             />
           </div>
           <div className="flex justify-between text-xs text-[#6B7280]">
-            <span>{totalCompletions} valides</span>
+            <span>{totalCompletions} complétés</span>
             <span>Objectif: {totalObjectif}</span>
           </div>
         </Card>
@@ -656,7 +656,8 @@ function EnqueteDetail({ affectation, segmentations, onBack }) {
           <div className="space-y-2.5 max-h-[200px] overflow-y-auto">
             {(() => {
               const enqueteId = affectation.enquete_id || affectation.enquetes?.id
-              const seg = segmentations?.find(s => s.enquete_id === enqueteId)
+              const seg = segmentations?.find(s => s.affectation_id === affectation.id)
+                || segmentations?.find(s => s.enquete_id === enqueteId)
               const allQuotas = seg?.segmentations?.flatMap(s => s.quotas) || []
               const filtered = allQuotas.filter(q => (q.completions || 0) > 0 || (q.objectif || 0) > 0)
                 .sort((a, b) => {

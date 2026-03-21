@@ -1215,7 +1215,7 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
               <p className="text-sm font-medium text-[#111827] mb-2 truncate">{enq.nom}</p>
               <ProgressBar value={enq.valides} max={enq.total_objectif} size="sm" />
               <div className="flex justify-between mt-2 text-[10px]">
-                <span className="text-[#059669]">{enq.valides} valides</span>
+                <span className="text-[#059669]">{enq.valides} complétés</span>
                 <span className="text-[#6B7280]">Obj: {enq.total_objectif}</span>
               </div>
               <div className="flex justify-between mt-1 text-[10px]">
@@ -1399,7 +1399,7 @@ function EnquetesListView({ enquetes, onSelect, onAdd, onEdit, onDelete, isSuper
               </div>
               <ProgressBar value={valides} max={enq.total_objectif} size="md" />
               <div className="flex justify-between mt-2 text-xs text-[#9CA3AF]">
-                <span>{valides} valides</span>
+                <span>{valides} complétés</span>
                 <span>Obj: {enq.total_objectif}</span>
               </div>
             </Card>
@@ -3803,7 +3803,7 @@ function MesEnquetesView({ affectations, segmentations, historique, onSelect }) 
                 />
               </div>
               <div className="flex justify-between text-xs text-[#6B7280]">
-                <span>{totalCompletions} valides</span>
+                <span>{totalCompletions} complétés</span>
                 <span>Objectif: {totalObjectif}</span>
               </div>
             </Card>
