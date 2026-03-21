@@ -2071,8 +2071,26 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client, resp
         qid = seg.get("_resolved_qid", seg["question_id"])
         aid_map = answer_id_maps.get(str(qid), {})
         segment_counts_by_question[qid] = {}
+        # Valeurs connues pour le fallback (lowercase) : from answer_options or quotas
+        known_values_lower = set(
+            o.get("text", "").strip().lower()
+            for o in (seg.get("answer_options") or [])
+            if o.get("text")
+        )
         for resp in enqueteur_responses:
             value = extract_segment_value_from_response(resp, qid, aid_map)
+            # Fallback : si le matching par question_id echoue (reponses venant d'un autre
+            # survey que le survey individuel), scanner toutes les reponses et chercher
+            # une valeur qui correspond a une valeur connue de la segmentation
+            if not value and known_values_lower:
+                for question in resp.get("responseSet", []):
+                    for ans in question.get("answerValues", []):
+                        ans_text = (ans.get("answerText") or "").strip()
+                        if ans_text and ans_text.lower() in known_values_lower:
+                            value = ans_text
+                            break
+                    if value:
+                        break
             if value:
                 segment_counts_by_question[qid][value] = segment_counts_by_question[qid].get(value, 0) + 1
 
