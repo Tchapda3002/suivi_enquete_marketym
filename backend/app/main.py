@@ -1973,8 +1973,23 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client, resp
     # Charger les segmentations depuis la table segmentations (nouveau systeme)
     segmentations_list = []
     if enquete_id:
-        seg_res = sb.table("segmentations").select("id, question_id, question_text, nom").eq("enquete_id", enquete_id).execute()
+        seg_res = sb.table("segmentations").select("id, question_id, question_text, nom, answer_options").eq("enquete_id", enquete_id).execute()
         segmentations_list = seg_res.data if seg_res.data else []
+        # Enrichir chaque segmentation avec les segment_values des quotas globaux (fallback pour answer_options vides)
+        if segmentations_list:
+            seg_ids = [s["id"] for s in segmentations_list if s.get("id")]
+            if seg_ids:
+                q_rows = sb.table("quotas").select("segmentation_id, segment_value").in_("segmentation_id", seg_ids).is_("affectation_id", "null").execute()
+                quota_vals_by_seg = {}
+                for qr in (q_rows.data or []):
+                    sid = qr.get("segmentation_id")
+                    sv = qr.get("segment_value", "")
+                    if sid and sv:
+                        quota_vals_by_seg.setdefault(sid, set()).add(sv)
+                for seg in segmentations_list:
+                    if not (seg.get("answer_options") or []):
+                        vals = quota_vals_by_seg.get(seg.get("id"), set())
+                        seg["answer_options"] = [{"text": v} for v in vals]
 
     # Fallback sur l'ancien champ segmentation_question_id si pas de segmentations
     if not segmentations_list and segmentation_question_id:
@@ -2012,16 +2027,43 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client, resp
             if seg_text in indiv_qid_by_text:
                 seg["_resolved_qid"] = indiv_qid_by_text[seg_text]
             else:
-                # Match souple par mot-cle du nom de la segmentation
-                seg_nom = (seg.get("nom") or "").strip().lower()
-                keywords = [w for w in seg_nom.split() if len(w) > 2]
-                if not keywords and seg_text:
-                    keywords = [w for w in seg_text.split() if len(w) > 3]
-                for q in target_questions:
-                    q_text = q["text"].strip().lower()
-                    if any(kw in q_text for kw in keywords):
-                        seg["_resolved_qid"] = q["id"]
-                        break
+                # Priorite 1 : match par chevauchement des answer_options
+                # (ex: si segmentation a options ["Cameroun","Cote d'Ivoire"], chercher
+                #  la question du survey individuel dont les reponses contiennent ces memes valeurs)
+                seg_options = set(
+                    o.get("text", "").strip().lower()
+                    for o in (seg.get("answer_options") or [])
+                    if o.get("text")
+                )
+                if seg_options:
+                    best_qid = None
+                    best_overlap = 0
+                    for q in target_questions:
+                        q_options = set(a["text"].strip().lower() for a in q.get("answers", []))
+                        overlap = len(seg_options & q_options)
+                        if overlap > best_overlap:
+                            best_overlap = overlap
+                            best_qid = q["id"]
+                    if best_overlap >= 2:
+                        seg["_resolved_qid"] = best_qid
+
+                # Priorite 2 (fallback) : match souple par mot-cle du nom
+                if "_resolved_qid" not in seg:
+                    seg_nom = (seg.get("nom") or "").strip().lower()
+                    keywords = [w for w in seg_nom.split() if len(w) > 2]
+                    if not keywords and seg_text:
+                        keywords = [w for w in seg_text.split() if len(w) > 3]
+                    # Chercher la question avec le plus de keywords correspondants
+                    best_qid = None
+                    best_score = 0
+                    for q in target_questions:
+                        q_text = q["text"].strip().lower()
+                        score = sum(1 for kw in keywords if kw in q_text)
+                        if score > best_score:
+                            best_score = score
+                            best_qid = q["id"]
+                    if best_score > 0:
+                        seg["_resolved_qid"] = best_qid
 
     # Compter les completions par segmentation et par valeur
     segment_counts_by_question = {}
