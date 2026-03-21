@@ -301,6 +301,12 @@ async def fetch_survey_responses(survey_id: str, page: int = 1, per_page: int = 
         data = response.json()
         return data.get("response", [])
 
+def normalize_segment_value(text: str) -> str:
+    """Normaliser la valeur d'un segment: apostrophes curly->droites, espaces insecables->espaces."""
+    if not text:
+        return text
+    return text.replace('\u2019', "'").replace('\u2018', "'").replace('\u00a0', ' ').strip()
+
 def extract_segment_value_from_response(response: dict, question_id: str, answer_id_map: dict = None) -> str:
     """Extraire la valeur d'un segment d'une reponse QuestionPro.
     answer_id_map: mapping answerID -> texte modalite (pour corriger les textes corrompus par QuestionPro)
@@ -312,8 +318,8 @@ def extract_segment_value_from_response(response: dict, question_id: str, answer
                 answer_id = answers[0].get("answerID")
                 # Utiliser le texte de la modalite si disponible (plus fiable que answerText)
                 if answer_id_map and answer_id in answer_id_map:
-                    return answer_id_map[answer_id]
-                return answers[0].get("answerText", "Autre")
+                    return normalize_segment_value(answer_id_map[answer_id])
+                return normalize_segment_value(answers[0].get("answerText", "Autre"))
     return None
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1453,7 +1459,7 @@ def get_quotas_by_segmentation(segmentation_id: str, admin: dict = Depends(requi
                 .is_("segmentation_id", "null")\
                 .execute()
         for s in cs.data:
-            seg_norm = s.get("segment_value", "")
+            seg_norm = normalize_segment_value(s.get("segment_value", ""))
             completions_par_segment[seg_norm] = completions_par_segment.get(seg_norm, 0) + (s.get("completions") or 0)
 
     # Quotas globaux
@@ -1471,7 +1477,7 @@ def get_quotas_by_segmentation(segmentation_id: str, admin: dict = Depends(requi
         seg_val = q.get("segment_value", "")
         pourcentage = q.get("pourcentage") or 0
         objectif = int(objectif_total_enquete * pourcentage / 100)
-        seg_norm = seg_val
+        seg_norm = normalize_segment_value(seg_val)
         valides_brut = completions_par_segment.get(seg_norm, 0)
         valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
         result.append({
@@ -2071,9 +2077,9 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client, resp
         qid = seg.get("_resolved_qid", seg["question_id"])
         aid_map = answer_id_maps.get(str(qid), {})
         segment_counts_by_question[qid] = {}
-        # Valeurs connues pour le fallback (lowercase) : from answer_options or quotas
+        # Valeurs connues pour le fallback (lowercase, normalisees) : from answer_options or quotas
         known_values_lower = set(
-            o.get("text", "").strip().lower()
+            normalize_segment_value(o.get("text", "")).lower()
             for o in (seg.get("answer_options") or [])
             if o.get("text")
         )
@@ -2085,7 +2091,7 @@ async def sync_affectation(affectation_id: str, survey_id: str, sb: Client, resp
             if not value and known_values_lower:
                 for question in resp.get("responseSet", []):
                     for ans in question.get("answerValues", []):
-                        ans_text = (ans.get("answerText") or "").strip()
+                        ans_text = normalize_segment_value((ans.get("answerText") or "").strip())
                         if ans_text and ans_text.lower() in known_values_lower:
                             value = ans_text
                             break
@@ -2414,7 +2420,7 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
         for a in affectations_enq:
             for s in all_cs.get(a["id"], []):
                 seg_id = s.get("segmentation_id")
-                seg_norm = s.get("segment_value", "")
+                seg_norm = normalize_segment_value(s.get("segment_value", ""))
                 count = s.get("completions") or 0
                 if seg_id:
                     if seg_id not in completions_enq_by_seg:
@@ -2442,7 +2448,7 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
                 seg_val = q.get("segment_value", "")
                 pourcentage = q.get("pourcentage") or 0
                 objectif = int(objectif_total_enquete * pourcentage / 100)
-                valides_brut = completions_seg.get(seg_val, 0)
+                valides_brut = completions_seg.get(normalize_segment_value(seg_val), 0)
                 valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
                 quotas_liste.append({
                     "segment_value": seg_val,
@@ -2523,7 +2529,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
                     .execute()
             completions_par_segment = {}
             for cs in cs_rows.data:
-                sv = cs.get("segment_value", "")
+                sv = normalize_segment_value(cs.get("segment_value", ""))
                 completions_par_segment[sv] = completions_par_segment.get(sv, 0) + (cs.get("completions") or 0)
 
             # Quotas globaux (avec pourcentage, pas objectif)
@@ -2541,7 +2547,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
                 pourcentage = q.get("pourcentage") or 0
                 objectif = int(objectif_total_aff * pourcentage / 100)
                 seg_val = q.get("segment_value", "")
-                valides_brut = completions_par_segment.get(seg_val, 0)
+                valides_brut = completions_par_segment.get(normalize_segment_value(seg_val), 0)
                 valides = min(valides_brut, objectif) if objectif > 0 else valides_brut
                 total_objectif += objectif
                 total_valides += valides
