@@ -1432,6 +1432,7 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
   const [segmentations, setSegmentations] = useState([])
   const [loading, setLoading] = useState(true)
   const [editAff, setEditAff] = useState(null)
+  const [selectedEnqueteurView, setSelectedEnqueteurView] = useState(null)
 
   useEffect(() => {
     loadData()
@@ -1478,6 +1479,16 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
   const totalObjectifAffectations = affectations.reduce((s, a) => s + (a.objectif_total || 0), 0)
   const objectifGlobal = tailleEchantillon > 0 ? tailleEchantillon : totalObjectifAffectations
   const pct = objectifGlobal > 0 ? Math.round((totalCompletions / objectifGlobal) * 100) : 0
+
+  // Vue enqueteur depuis l'enquete
+  if (selectedEnqueteurView) {
+    return (
+      <EnqueteurDetailView
+        enqueteur={selectedEnqueteurView}
+        onBack={() => setSelectedEnqueteurView(null)}
+      />
+    )
+  }
 
   return (
     <div className="h-full flex flex-col animate-fadeIn">
@@ -1601,13 +1612,17 @@ function EnqueteDetailView({ enquete, enqueteurs, onBack, onRefresh, onEdit, onD
                       return (
                         <tr key={a.id} className="border-b border-[#E5E7EB] hover:bg-[#F9FAFB]">
                           <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => setSelectedEnqueteurView({ id: a.enqueteur_id, ...enqr })}
+                              className="flex items-center gap-3 hover:underline text-left"
+                              title="Voir le dashboard de cet enqueteur"
+                            >
                               <Avatar name={`${enqr.prenom} ${enqr.nom}`} size="sm" />
                               <div>
                                 <p className="text-sm font-medium text-[#111827]">{enqr.prenom} {enqr.nom}</p>
                                 <p className="text-xs font-mono text-[#9CA3AF]">{enqr.identifiant}</p>
                               </div>
-                            </div>
+                            </button>
                           </td>
                           <td className="text-center px-4 py-3 text-sm font-mono text-[#6B7280]">{a.clics}</td>
                           <td className="text-center px-4 py-3 text-sm font-mono font-medium text-[#111827]">{valides}</td>
