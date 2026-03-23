@@ -2838,20 +2838,29 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
                 <div className="space-y-3 max-h-[300px] overflow-y-auto">
                   {segmentations.length > 0 ? (() => {
                     const activeSeg = segmentations.find(s => s.enquete_id === selectedSegEnquete) || segmentations[0]
-                    if (!activeSeg?.segments?.length) return <p className="text-center text-[#9CA3AF] py-4">Pas de donnees</p>
-                    const maxComp = Math.max(...activeSeg.segments.map(s => s.completions || 0), 1)
-                    return activeSeg.segments.map((seg, i) => (
-                      <div key={i} className="flex items-center gap-3">
-                        <span className="text-xs text-[#6B7280] w-24 truncate" title={seg.segment_value}>{seg.segment_value}</span>
-                        <div className="flex-1 h-6 bg-[#F3F4F6] rounded-full overflow-hidden relative">
-                          <div
-                            className="h-full rounded-full bg-[#059669] transition-all duration-500"
-                            style={{ width: `${Math.round(((seg.completions || 0) / maxComp) * 100)}%` }}
-                          />
-                          <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium">
-                            {seg.completions || 0}
-                          </span>
-                        </div>
+                    if (!activeSeg?.segmentations?.length) return <p className="text-center text-[#9CA3AF] py-4">Pas de donnees</p>
+                    return activeSeg.segmentations.map(seg => (
+                      <div key={seg.id}>
+                        <p className="text-xs font-medium text-[#6B7280] mb-2">{seg.nom}</p>
+                        {(seg.quotas || []).sort((a, b) => (b.completions || 0) - (a.completions || 0)).map((q, i) => {
+                          const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
+                          const isComplete = pct >= 100
+                          return (
+                            <div key={i} className={`p-2 mb-1 rounded-lg ${isComplete ? 'bg-[#ECFDF5]' : 'bg-[#F9FAFB]'}`}>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className={`font-medium text-xs ${isComplete ? 'text-[#059669]' : 'text-[#111827]'}`}>{q.segment_value}</span>
+                                <span className="text-xs font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
+                              </div>
+                              <div className="h-1 bg-[#E5E7EB] rounded-full overflow-hidden">
+                                <div className="h-full bg-[#059669] rounded-full" style={{ width: `${Math.min(pct, 100)}%` }} />
+                              </div>
+                              <div className="flex justify-between mt-1 text-[10px] text-[#9CA3AF]">
+                                <span>{q.completions || 0} complétés</span>
+                                <span>obj. {q.objectif}</span>
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
                     ))
                   })() : <p className="text-center text-[#9CA3AF] py-4">Aucune segmentation</p>}
