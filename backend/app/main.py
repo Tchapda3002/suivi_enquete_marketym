@@ -64,6 +64,10 @@ app.add_middleware(
 
 CORS_HEADERS = {"Access-Control-Allow-Origin": "*"}
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
 @app.get("/health")
 def health():
     next_sync = None
