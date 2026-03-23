@@ -302,7 +302,7 @@ function TabButton({ active, onClick, icon, label, badge }) {
    DASHBOARD TAB
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, totalDemarre, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
+export function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, totalDemarre, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
   const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
 
   return (
@@ -468,7 +468,7 @@ function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClic
    ENQUETES TAB
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function EnquetesTab({ affectations, onSelect }) {
+export function EnquetesTab({ affectations, onSelect }) {
   return (
     <div className="animate-fadeIn">
       <div className="mb-6">
@@ -550,7 +550,7 @@ function EnquetesTab({ affectations, onSelect }) {
    ENQUETE DETAIL
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function EnqueteDetail({ affectation, segmentations, onBack }) {
+export function EnqueteDetail({ affectation, segmentations, onBack }) {
   const enquete = affectation.enquetes || {}
   const status = STATUT_CONFIG[affectation.statut] || STATUT_CONFIG.en_cours
   const completions = affectation.completions_valides ?? affectation.completions_total ?? 0
@@ -1173,7 +1173,7 @@ function RejoindreTab({ enqueteur, enquetesDisponibles, affectations, demandes, 
    HELPER COMPONENTS
    ══════════════════════════════════════════════════════════════════════════════ */
 
-function KPICard({ label, value, subValue, color }) {
+export function KPICard({ label, value, subValue, color }) {
   return (
     <Card className="p-4">
       <p className="text-[10px] font-semibold text-[#9CA3AF] uppercase tracking-wider mb-1">{label}</p>
@@ -1185,7 +1185,7 @@ function KPICard({ label, value, subValue, color }) {
   )
 }
 
-function getProgressColor(pct) {
+export function getProgressColor(pct) {
   if (pct >= 100) return '#059669'
   if (pct >= 75) return '#10B981'
   if (pct >= 50) return '#F59E0B'

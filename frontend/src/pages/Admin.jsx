@@ -45,6 +45,7 @@ import {
   refuserDemande,
 } from '../lib/api'
 import { Card, Badge, Button, Modal, Input, Avatar, Spinner, LineChart, CopyButton } from '../components/ui'
+import { DashboardTab, EnquetesTab, EnqueteDetail } from './Dashboard'
 
 const STATUTS = [
   { value: 'en_cours',  label: 'En cours',  variant: 'info' },
@@ -2646,7 +2647,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
   const [segmentations, setSegmentations] = useState([])
   const [historique, setHistorique] = useState([])
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
+  const [selectedEnquete, setSelectedEnquete] = useState(null)
 
   useEffect(() => {
     loadDetails()
@@ -2677,6 +2678,29 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
   const globalPct = Math.round((totalCompletions / Math.max(totalObjectif, 1)) * 100)
   const conversionRate = totalClics > 0 ? Math.round((totalCompletions / totalClics) * 100) : 0
 
+  // Vue detail d'une enquete
+  if (selectedEnquete) {
+    return (
+      <div className="h-full flex flex-col">
+        <div className="px-6 pt-4 pb-3 border-b border-[#E5E7EB] bg-white">
+          <button onClick={onBack} className="flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#111827] mb-1">
+            <BackIcon /> Retour aux enqueteurs
+          </button>
+          <p className="text-xs text-[#9CA3AF]">
+            Vue de <span className="font-medium text-[#6B7280]">{details.prenom} {details.nom}</span>
+          </p>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6">
+          <EnqueteDetail
+            affectation={selectedEnquete}
+            segmentations={segmentations}
+            onBack={() => setSelectedEnquete(null)}
+          />
+        </div>
+      </div>
+    )
+  }
+
   const tabs = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'enquetes', label: `Enquetes (${affectations.length})` },
@@ -2684,7 +2708,7 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
 
   return (
     <div className="h-full flex flex-col animate-fadeIn">
-      {/* Header */}
+      {/* Header admin */}
       <div className="p-6 border-b border-[#E5E7EB] bg-white">
         <button onClick={onBack} className="flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#111827] mb-4">
           <BackIcon />
@@ -2730,192 +2754,26 @@ function EnqueteurDetailView({ enqueteur, onBack }) {
         </div>
       </div>
 
-      {/* Contenu */}
+      {/* Contenu — interface identique a celle de l'enqueteur */}
       <div className="flex-1 overflow-y-auto p-6">
         {activeTab === 'dashboard' ? (
-          <>
-            {/* KPIs */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-              <Card className="p-4">
-                <p className="text-2xl font-bold text-[#059669]">{totalCompletions}</p>
-                <p className="text-xs text-[#6B7280]">Questionnaires complétés <span className="text-[#9CA3AF]">/ {totalObjectif}</span></p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-2xl font-bold text-[#2563EB]">{totalObjectif}</p>
-                <p className="text-xs text-[#6B7280]">Objectif</p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-2xl font-bold text-[#7C3AED]">{totalClics}</p>
-                <p className="text-xs text-[#6B7280]">Clics uniques</p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-2xl font-bold text-[#0891B2]">{totalDemarre}</p>
-                <p className="text-xs text-[#6B7280]">Demarres</p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-2xl font-bold text-[#D97706]">{conversionRate}%</p>
-                <p className="text-xs text-[#6B7280]">Conversion</p>
-              </Card>
-            </div>
-
-            {/* Progression + Courbe */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              <Card className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-[#111827]">Progression globale</h3>
-                  <span className="text-2xl font-bold text-[#059669]">{globalPct}%</span>
-                </div>
-                <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden mb-2">
-                  <div className="h-full rounded-full bg-[#059669] transition-all duration-700" style={{ width: `${Math.min(globalPct, 100)}%` }} />
-                </div>
-                <div className="flex justify-between text-xs text-[#6B7280]">
-                  <span>{totalCompletions} completions</span>
-                  <span>Objectif: {totalObjectif}</span>
-                </div>
-              </Card>
-              <Card className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-[#111827]">Evolution (30 jours)</h3>
-                  {historique.length > 0 && <span className="text-xs text-[#6B7280]">{historique.length} jours</span>}
-                </div>
-                <LineChart data={historique} height={100} color="#059669" />
-              </Card>
-            </div>
-
-            {/* Segmentations */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Liste enquetes */}
-              <Card className="p-6">
-                <h3 className="font-semibold text-[#111827] mb-4">Enquetes</h3>
-                <div className="space-y-3">
-                  {affectations.map(aff => {
-                    const enq = aff.enquetes || {}
-                    const comp = aff.completions_valides ?? aff.completions_total ?? 0
-                    const pct = Math.round((comp / Math.max(aff.objectif_total, 1)) * 100)
-                    return (
-                      <div key={aff.id} className="p-3 rounded-lg bg-[#F9FAFB]">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[#E5E7EB] text-[#6B7280]">{enq.code}</span>
-                            <span className="text-sm font-medium text-[#111827]">{enq.nom}</span>
-                          </div>
-                          <span className="text-sm font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
-                        </div>
-                        <ProgressBar value={comp} max={aff.objectif_total} size="sm" />
-                        <div className="flex justify-between mt-1 text-xs text-[#9CA3AF]">
-                          <span>{comp} / {aff.objectif_total}</span>
-                          <span>{aff.clics || 0} clics</span>
-                        </div>
-                      </div>
-                    )
-                  })}
-                  {affectations.length === 0 && <p className="text-center text-[#9CA3AF] py-4">Aucune enquete</p>}
-                </div>
-              </Card>
-
-              {/* Segmentations */}
-              <Card className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-[#111827]">Segmentations</h3>
-                  {segmentations.length > 1 && (
-                    <div className="flex gap-1">
-                      {segmentations.map(seg => (
-                        <button
-                          key={seg.enquete_id}
-                          onClick={() => setSelectedSegEnquete(selectedSegEnquete === seg.enquete_id ? null : seg.enquete_id)}
-                          className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                            selectedSegEnquete === seg.enquete_id || (selectedSegEnquete === null && segmentations[0]?.enquete_id === seg.enquete_id)
-                              ? 'bg-[#059669] text-white'
-                              : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
-                          }`}
-                        >
-                          {seg.enquete_code}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="space-y-3 max-h-[300px] overflow-y-auto">
-                  {segmentations.length > 0 ? (() => {
-                    const activeSeg = segmentations.find(s => s.enquete_id === selectedSegEnquete) || segmentations[0]
-                    if (!activeSeg?.segmentations?.length) return <p className="text-center text-[#9CA3AF] py-4">Pas de donnees</p>
-                    return activeSeg.segmentations.map(seg => (
-                      <div key={seg.id}>
-                        <p className="text-xs font-medium text-[#6B7280] mb-2">{seg.nom}</p>
-                        {(seg.quotas || []).sort((a, b) => (b.completions || 0) - (a.completions || 0)).map((q, i) => {
-                          const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
-                          const isComplete = pct >= 100
-                          return (
-                            <div key={i} className={`p-2 mb-1 rounded-lg ${isComplete ? 'bg-[#ECFDF5]' : 'bg-[#F9FAFB]'}`}>
-                              <div className="flex items-center justify-between mb-1">
-                                <span className={`font-medium text-xs ${isComplete ? 'text-[#059669]' : 'text-[#111827]'}`}>{q.segment_value}</span>
-                                <span className="text-xs font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
-                              </div>
-                              <div className="h-1 bg-[#E5E7EB] rounded-full overflow-hidden">
-                                <div className="h-full bg-[#059669] rounded-full" style={{ width: `${Math.min(pct, 100)}%` }} />
-                              </div>
-                              <div className="flex justify-between mt-1 text-[10px] text-[#9CA3AF]">
-                                <span>{q.completions || 0} complétés</span>
-                                <span>obj. {q.objectif}</span>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    ))
-                  })() : <p className="text-center text-[#9CA3AF] py-4">Aucune segmentation</p>}
-                </div>
-              </Card>
-            </div>
-          </>
+          <DashboardTab
+            affectations={affectations}
+            totalCompletions={totalCompletions}
+            totalObjectif={totalObjectif}
+            totalClics={totalClics}
+            totalDemarre={totalDemarre}
+            globalPct={globalPct}
+            conversionRate={conversionRate}
+            segmentations={segmentations}
+            historique={historique}
+            onSelectEnquete={(aff) => setSelectedEnquete(aff)}
+          />
         ) : (
-          /* Onglet Enquetes - liste detaillee */
-          <div className="space-y-4">
-            {affectations.map(aff => {
-              const enquete = aff.enquetes || {}
-              const completions = aff.completions_valides ?? aff.completions_total ?? 0
-              const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
-              const convRate = aff.clics > 0 ? Math.round((completions / aff.clics) * 100) : 0
-              return (
-                <Card key={aff.id} className="p-5">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-mono px-2 py-1 rounded bg-[#F3F4F6] text-[#6B7280]">{enquete.code}</span>
-                        <Badge variant={pct >= 100 ? 'success' : pct >= 50 ? 'info' : 'warning'} size="sm">{pct}%</Badge>
-                      </div>
-                      <h4 className="text-lg font-medium text-[#111827]">{enquete.nom}</h4>
-                      {enquete.cible && <p className="text-sm text-[#6B7280]">{enquete.cible}</p>}
-                    </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold" style={{ color: getProgressColor(pct) }}>{completions}</p>
-                      <p className="text-xs text-[#9CA3AF]">/ {aff.objectif_total}</p>
-                    </div>
-                  </div>
-                  <ProgressBar value={completions} max={aff.objectif_total} size="md" />
-                  <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-[#E5E7EB]">
-                    <div className="text-center">
-                      <p className="text-lg font-bold text-[#059669]">{completions}</p>
-                      <p className="text-[10px] text-[#6B7280]">Complétés</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-lg font-bold text-[#0891B2]">{aff.demarre_total || 0}</p>
-                      <p className="text-[10px] text-[#6B7280]">Demarres</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-lg font-bold text-[#7C3AED]">{aff.clics || 0}</p>
-                      <p className="text-[10px] text-[#6B7280]">Clics</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-lg font-bold text-[#D97706]">{convRate}%</p>
-                      <p className="text-[10px] text-[#6B7280]">Conv.</p>
-                    </div>
-                  </div>
-                </Card>
-              )
-            })}
-            {affectations.length === 0 && <div className="text-center py-12 text-[#9CA3AF]">Aucune enquete assignee</div>}
-          </div>
+          <EnquetesTab
+            affectations={affectations}
+            onSelect={setSelectedEnquete}
+          />
         )}
       </div>
     </div>
