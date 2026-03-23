@@ -197,10 +197,19 @@ class UpdateRoleRequest(BaseModel):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _COUNTRY_ALIASES = {
-    "République du Congo": "Congo-Brazzaville",
-    "Republique du Congo": "Congo-Brazzaville",
+    # Noms QP → valeur normalisée en base
+    "République du Congo": "Congo",
+    "Republique du Congo": "Congo",
+    "Congo-Brazzaville": "Congo",
+    "République Centrafricaine": "RCA",
+    "Republique Centrafricaine": "RCA",
     "Guinée Bissau": "Guinée-Bissau",
     "Guinee Bissau": "Guinée-Bissau",
+    # QP renvoie "Côte dIvoire" (pas d'apostrophe) — alias obligatoire
+    "Côte dIvoire": "Côte d'Ivoire",
+    "Cote dIvoire": "Côte d'Ivoire",
+    "Cote d'Ivoire": "Côte d'Ivoire",
+    "Cote d Ivoire": "Côte d'Ivoire",
 }
 
 def normalize_segment_value(text: str) -> str:
@@ -220,10 +229,10 @@ def get_answer_option_id(sb: Client, segmentation_id: str, segment_value: str) -
     return res.data[0]["id"] if res.data else None
 
 def load_answer_options_map(sb: Client, segmentation_ids: List[str]) -> Dict[str, Dict[str, str]]:
-    """Charger {segmentation_id: {valeur: ao_id}} pour un lot de segmentations."""
+    """Charger {segmentation_id: {valeur: ao_id, "__qp__<qp_answer_id>": ao_id}} pour un lot de segmentations."""
     if not segmentation_ids:
         return {}
-    res = sb.table("answer_options").select("id, segmentation_id, valeur")\
+    res = sb.table("answer_options").select("id, segmentation_id, valeur, qp_answer_id")\
         .in_("segmentation_id", segmentation_ids)\
         .execute()
     result: Dict[str, Dict[str, str]] = {}
@@ -232,6 +241,9 @@ def load_answer_options_map(sb: Client, segmentation_ids: List[str]) -> Dict[str
         if sid not in result:
             result[sid] = {}
         result[sid][ao["valeur"]] = ao["id"]
+        # Clé secondaire par qp_answer_id (matching robuste sans dépendre du texte)
+        if ao.get("qp_answer_id"):
+            result[sid][f"__qp__{ao['qp_answer_id']}"] = ao["id"]
     return result
 
 def compute_quotas_for_segmentation(
@@ -1647,14 +1659,31 @@ async def sync_affectation(
         aid_map = answer_id_maps.get(str(qid), {})
         seg_ao_map = ao_map.get(seg_id, {}) if seg_id else {}
 
-        # Valeurs connues pour le fallback scan
-        known_values_lower = {v.lower() for v in seg_ao_map.keys()}
+        # Valeurs connues pour le fallback scan (exclure les clés __qp__)
+        known_values_lower = {v.lower() for v in seg_ao_map.keys() if not v.startswith("__qp__")}
 
         counts: Dict[str, int] = {}
         for resp in enqueteur_responses:
-            value = extract_segment_value_from_response(resp, qid, aid_map)
+            value = None
+            # Priorité 1 : matching par qp_answer_id (robuste, insensible aux variations de texte)
+            for question in resp.get("responseSet", []):
+                if str(question.get("questionID", "")) == str(qid):
+                    for ans in question.get("answerValues", []):
+                        ans_id = ans.get("answerID")
+                        if ans_id:
+                            qp_key = f"__qp__{ans_id}"
+                            if qp_key in seg_ao_map:
+                                # Trouver la valeur texte correspondante
+                                ao_id_direct = seg_ao_map[qp_key]
+                                value = next((k for k, v in seg_ao_map.items()
+                                              if v == ao_id_direct and not k.startswith("__qp__")), None)
+                                break
+                    break
+            # Priorité 2 : matching par texte (normalize + alias)
+            if not value:
+                value = extract_segment_value_from_response(resp, qid, aid_map)
+            # Priorité 3 : scan fallback sur toutes les questions
             if not value and known_values_lower:
-                # Scan de toutes les réponses pour trouver une valeur connue
                 for question in resp.get("responseSet", []):
                     for ans in question.get("answerValues", []):
                         ans_text = normalize_segment_value((ans.get("answerText") or "").strip())
