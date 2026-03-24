@@ -303,7 +303,10 @@ function TabButton({ active, onClick, icon, label, badge }) {
    ══════════════════════════════════════════════════════════════════════════════ */
 
 export function DashboardTab({ affectations, totalCompletions, totalObjectif, totalClics, totalDemarre, globalPct, conversionRate, segmentations, historique, onSelectEnquete }) {
-  const [selectedSegEnquete, setSelectedSegEnquete] = useState(null)
+  // Completions aujourd'hui depuis l'historique
+  const today = new Date().toISOString().slice(0, 10)
+  const todayData = historique?.find(h => h.date === today)
+  const todayCompletions = todayData?.completions || 0
 
   return (
     <div className="animate-fadeIn">
@@ -313,49 +316,35 @@ export function DashboardTab({ affectations, totalCompletions, totalObjectif, to
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <KPICard label="Questionnaires complétés" value={totalCompletions} subValue={`/ ${totalObjectif}`} color="#059669" />
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+        <KPICard label="Aujourd'hui" value={todayCompletions} subValue="completions" color="#111827" />
+        <KPICard label="Questionnaires completes" value={totalCompletions} subValue={`/ ${totalObjectif}`} color="#059669" />
         <KPICard label="Objectif" value={totalObjectif} subValue="reponses" color="#2563EB" />
         <KPICard label="Clics" value={totalClics} subValue="ouvertures uniques" color="#7C3AED" />
         <KPICard label="Demarres" value={totalDemarre} subValue="ont commence" color="#0891B2" />
-        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="clic→complété" color="#D97706" />
+        <KPICard label="Conversion" value={`${conversionRate}%`} subValue="clic->complete" color="#D97706" />
       </div>
 
-      {/* Progression globale + Courbe */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-[#111827]">Progression globale</h3>
-            <span className="text-2xl font-bold text-[#059669]">{globalPct}%</span>
-          </div>
-          <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden mb-2">
-            <div
-              className="h-full rounded-full bg-[#059669] transition-all duration-700"
-              style={{ width: `${Math.min(globalPct, 100)}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-xs text-[#6B7280]">
-            <span>{totalCompletions} complétés</span>
-            <span>Objectif: {totalObjectif}</span>
-          </div>
-        </Card>
-
-        {/* Courbe d'evolution */}
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-[#111827]">Evolution (30 jours)</h3>
-            {historique && historique.length > 0 && (
-              <span className="text-xs text-[#6B7280]">
-                {historique.length} jours
-              </span>
-            )}
-          </div>
-          <LineChart data={historique} height={100} color="#059669" />
-        </Card>
-      </div>
+      {/* Progression globale pleine largeur */}
+      <Card className="p-6 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-[#111827]">Progression globale</h3>
+          <span className="text-2xl font-bold text-[#059669]">{globalPct}%</span>
+        </div>
+        <div className="h-3 bg-[#E5E7EB] rounded-full overflow-hidden mb-2">
+          <div
+            className="h-full rounded-full bg-[#059669] transition-all duration-700"
+            style={{ width: `${Math.min(globalPct, 100)}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-xs text-[#6B7280]">
+          <span>{totalCompletions} completes</span>
+          <span>Objectif: {totalObjectif}</span>
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Mes enquetes */}
+        {/* Mes enquetes — raccourcis */}
         <Card className="p-6">
           <h3 className="font-semibold text-[#111827] mb-4">Mes enquetes</h3>
           <div className="space-y-4">
@@ -363,11 +352,12 @@ export function DashboardTab({ affectations, totalCompletions, totalObjectif, to
               const enquete = aff.enquetes || {}
               const completions = aff.completions_valides ?? aff.completions_total ?? 0
               const pct = Math.round((completions / Math.max(aff.objectif_total, 1)) * 100)
+              const convRate = aff.clics > 0 ? Math.round((completions / aff.clics) * 100) : 0
               return (
                 <button
                   key={aff.id}
                   onClick={() => onSelectEnquete(aff)}
-                  className="w-full text-left p-3 rounded-lg hover:bg-[#F9FAFB] transition-colors"
+                  className="w-full text-left p-3 rounded-lg hover:bg-[#F9FAFB] transition-colors border border-[#E5E7EB]"
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
@@ -376,7 +366,14 @@ export function DashboardTab({ affectations, totalCompletions, totalObjectif, to
                       </span>
                       <span className="text-sm font-medium text-[#111827]">{enquete.nom}</span>
                     </div>
-                    <span className="text-sm font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#059669] font-medium">
+                        Prog: {pct}%
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-[#F5F3FF] text-[#7C3AED] font-medium">
+                        Conv: {convRate}%
+                      </span>
+                    </div>
                   </div>
                   <ProgressBar value={completions} max={aff.objectif_total} size="sm" />
                   <div className="flex justify-between mt-1 text-xs text-[#9CA3AF]">
@@ -392,72 +389,17 @@ export function DashboardTab({ affectations, totalCompletions, totalObjectif, to
           </div>
         </Card>
 
-        {/* Segmentations dynamiques */}
+        {/* Evolution (30 jours) */}
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-[#111827]">Segmentations</h3>
-            {segmentations && segmentations.length > 1 && (
-              <div className="flex gap-1">
-                {segmentations.map(seg => (
-                  <button
-                    key={seg.enquete_id}
-                    onClick={() => setSelectedSegEnquete(selectedSegEnquete === seg.enquete_id ? null : seg.enquete_id)}
-                    className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                      selectedSegEnquete === seg.enquete_id || (selectedSegEnquete === null && segmentations[0]?.enquete_id === seg.enquete_id)
-                        ? 'bg-[#059669] text-white'
-                        : 'bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]'
-                    }`}
-                  >
-                    {seg.enquete_code}
-                  </button>
-                ))}
-              </div>
+            <h3 className="font-semibold text-[#111827]">Evolution (30 jours)</h3>
+            {historique && historique.length > 0 && (
+              <span className="text-xs text-[#6B7280]">
+                {historique.length} jours
+              </span>
             )}
           </div>
-          <div className="space-y-3 max-h-[300px] overflow-y-auto">
-            {segmentations && segmentations.length > 0 ? (
-              (() => {
-                const currentSeg = segmentations.find(s => s.enquete_id === selectedSegEnquete) || segmentations[0]
-                return currentSeg?.segmentations?.map(seg => (
-                  <div key={seg.id}>
-                    <p className="text-xs font-medium text-[#6B7280] mb-2">{seg.nom}</p>
-                    {[...seg.quotas].sort((a, b) => {
-                      const pA = a.objectif > 0 ? (a.completions || 0) / a.objectif : 0
-                      const pB = b.objectif > 0 ? (b.completions || 0) / b.objectif : 0
-                      return pB - pA
-                    }).map((q, i) => {
-                      const pct = q.objectif > 0 ? Math.round(((q.completions || 0) / q.objectif) * 100) : 0
-                      const isComplete = pct >= 100
-                      return (
-                        <div key={i} className={`p-2 mb-1 rounded-lg ${isComplete ? 'bg-[#ECFDF5]' : 'bg-[#F9FAFB]'}`}>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className={`font-medium text-xs ${isComplete ? 'text-[#059669]' : 'text-[#111827]'}`}>
-                              {q.segment_value}
-                              {isComplete && (
-                                <svg className="w-3 h-3 inline ml-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                  <polyline points="20 6 9 17 4 12" />
-                                </svg>
-                              )}
-                            </span>
-                            <span className="text-xs font-semibold" style={{ color: getProgressColor(pct) }}>{pct}%</span>
-                          </div>
-                          <div className="h-1 bg-[#E5E7EB] rounded-full overflow-hidden">
-                            <div className="h-full rounded-full bg-[#059669]" style={{ width: `${Math.min(pct, 100)}%` }} />
-                          </div>
-                          <div className="flex justify-between mt-1 text-[9px] text-[#6B7280]">
-                            <span>{q.completions || 0}</span>
-                            <span>/ {q.objectif}</span>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ))
-              })()
-            ) : (
-              <p className="text-center text-[#9CA3AF] py-4">Aucune segmentation configuree</p>
-            )}
-          </div>
+          <LineChart data={historique} height={200} color="#059669" />
         </Card>
       </div>
     </div>
