@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getEnqueteur, syncEnqueteur, getEnqueteurSegmentations, getHistoriqueEnqueteur, authRequestProfileOTP, authUpdateProfile, creerDemande, getDemandesEnqueteur, getEnquetesDisponibles } from '../lib/api'
-import { Card, Badge, ProgressBar, CopyButton, Spinner, Avatar, Button, LineChart, Input, Modal } from '../components/ui'
+import { Card, Badge, ProgressBar, CopyButton, Spinner, Avatar, Button, LineChart, Input, Modal, QuotaTable } from '../components/ui'
 
 const STATUT_CONFIG = {
   en_cours:  { label: 'En cours',  variant: 'info' },
@@ -653,39 +653,14 @@ export function EnqueteDetail({ affectation, segmentations, onBack }) {
             </svg>
             Progression par segment
           </h3>
-          <div className="space-y-2.5 max-h-[200px] overflow-y-auto">
-            {(() => {
-              const enqueteId = affectation.enquete_id || affectation.enquetes?.id
-              const seg = segmentations?.find(s => s.affectation_id === affectation.id)
-                || segmentations?.find(s => s.enquete_id === enqueteId)
-              const allQuotas = seg?.segmentations?.flatMap(s => s.quotas) || []
-              const filtered = allQuotas.filter(q => (q.completions || 0) > 0 || (q.objectif || 0) > 0)
-                .sort((a, b) => {
-                  const pctA = (a.completions || 0) / Math.max(a.objectif || 1, 1)
-                  const pctB = (b.completions || 0) / Math.max(b.objectif || 1, 1)
-                  return pctB - pctA
-                })
-              return filtered.length > 0 ? filtered.map((q, i) => {
-                const segPct = Math.min(Math.round(((q.completions || 0) / Math.max(q.objectif || 1, 1)) * 100), 100)
-                const isComplete = segPct >= 100
-                return (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className={`w-24 text-sm truncate ${isComplete ? 'text-[#059669] font-medium' : 'text-[#4B5563]'}`} title={q.segment_value}>
-                      {q.segment_value || 'Inconnu'}
-                    </span>
-                    <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
-                      <div className="h-full rounded-full bg-[#059669]" style={{ width: `${segPct}%` }} />
-                    </div>
-                    <span className="text-xs font-mono text-[#9CA3AF] w-14 text-right">
-                      {q.completions || 0}/{q.objectif || 0}
-                    </span>
-                  </div>
-                )
-              }) : (
-                <p className="text-sm text-[#9CA3AF] text-center py-6">Aucun quota defini</p>
-              )
-            })()}
-          </div>
+          {(() => {
+            const enqueteId = affectation.enquete_id || affectation.enquetes?.id
+            const seg = segmentations?.find(s => s.affectation_id === affectation.id)
+              || segmentations?.find(s => s.enquete_id === enqueteId)
+            const allQuotas = seg?.segmentations?.flatMap(s => s.quotas) || []
+            const filtered = allQuotas.filter(q => (q.completions || 0) > 0 || (q.objectif || 0) > 0)
+            return <QuotaTable quotas={filtered} compact />
+          })()}
         </Card>
       </div>
 

@@ -199,6 +199,105 @@ export function ProgressBar({ value, max = 100, size = 'md', showLabel = false }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// QUOTA TABLE — tableau écart quota vs réalisé
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function QuotaTable({ quotas = [], compact = false }) {
+  if (quotas.length === 0) {
+    return <p className="text-sm text-[#9CA3AF] text-center py-4">Aucun quota defini</p>
+  }
+
+  const sorted = [...quotas].sort((a, b) => (b.pourcentage || 0) - (a.pourcentage || 0))
+
+  const getEcartColor = (ecart) => ecart >= 0 ? '#059669' : '#DC2626'
+  const getAtteintColor = (pct) => pct >= 100 ? '#059669' : pct >= 60 ? '#D97706' : '#DC2626'
+
+  if (compact) {
+    // Version compacte pour le dashboard admin (segmentations overview)
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-[#1F2937]">
+              {['Segment', 'Quota %', 'Obj.', 'Réalisé', 'Écart', '% Atteint'].map(h => (
+                <th key={h} className="px-2 py-1.5 text-[10px] font-semibold text-white text-center first:text-left">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((q, i) => {
+              const obj = q.objectif || 0
+              const val = q.valides ?? q.completions ?? 0
+              const ecart = val - obj
+              const pctAtteint = obj > 0 ? Math.round((val / obj) * 100) : (val > 0 ? 999 : 0)
+              return (
+                <tr key={q.id || i} className={i % 2 === 0 ? 'bg-[#F9FAFB]' : 'bg-white'}>
+                  <td className="px-2 py-1 text-xs text-[#111827] truncate max-w-[120px]" title={q.segment_value}>{q.segment_value}</td>
+                  <td className="px-2 py-1 text-xs text-[#6B7280] text-center">{q.pourcentage || 0}%</td>
+                  <td className="px-2 py-1 text-xs text-[#111827] text-center font-mono">{obj}</td>
+                  <td className="px-2 py-1 text-xs font-mono text-center" style={{ color: '#059669' }}>{val}</td>
+                  <td className="px-2 py-1 text-xs font-mono font-semibold text-center" style={{ color: getEcartColor(ecart) }}>{ecart > 0 ? '+' : ''}{ecart}</td>
+                  <td className="px-2 py-1 text-xs font-semibold text-center" style={{ color: getAtteintColor(pctAtteint) }}>{pctAtteint}%</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
+  // Version complète avec barre de progression
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="bg-[#1F2937]">
+            {['Segment', 'Quota %', 'Objectif', 'Réalisé', 'Écart', '% Atteint', 'Progression'].map(h => (
+              <th key={h} className="px-3 py-2 text-xs font-semibold text-white text-center first:text-left">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((q, i) => {
+            const obj = q.objectif || 0
+            const val = q.valides ?? q.completions ?? 0
+            const ecart = val - obj
+            const pctAtteint = obj > 0 ? Math.round((val / obj) * 100) : (val > 0 ? 999 : 0)
+            const barPct = Math.min(pctAtteint, 100)
+            return (
+              <tr key={q.id || i} className={`${i % 2 === 0 ? 'bg-[#F9FAFB]' : 'bg-white'} hover:bg-[#F3F4F6]`}>
+                <td className="px-3 py-2 text-sm text-[#111827]">{q.segment_value}</td>
+                <td className="px-3 py-2 text-sm text-[#6B7280] text-center">{q.pourcentage || 0}%</td>
+                <td className="px-3 py-2 text-sm text-[#111827] text-center font-mono">{obj}</td>
+                <td className="px-3 py-2 text-sm font-mono text-center" style={{ color: '#059669' }}>{val}</td>
+                <td className="px-3 py-2 text-sm font-mono font-semibold text-center" style={{ color: getEcartColor(ecart) }}>
+                  {ecart > 0 ? '+' : ''}{ecart}
+                </td>
+                <td className="px-3 py-2 text-sm font-semibold text-center" style={{ color: getAtteintColor(pctAtteint) }}>
+                  {pctAtteint}%
+                </td>
+                <td className="px-3 py-2 w-32">
+                  <div className="h-2 bg-[#E5E7EB] rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${barPct}%`,
+                        backgroundColor: getAtteintColor(pctAtteint),
+                      }}
+                    />
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CARD
 // ─────────────────────────────────────────────────────────────────────────────
 

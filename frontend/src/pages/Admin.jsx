@@ -44,7 +44,7 @@ import {
   accepterDemande,
   refuserDemande,
 } from '../lib/api'
-import { Card, Badge, Button, Modal, Input, Avatar, Spinner, LineChart, CopyButton } from '../components/ui'
+import { Card, Badge, Button, Modal, Input, Avatar, Spinner, LineChart, CopyButton, QuotaTable } from '../components/ui'
 import { DashboardTab, EnquetesTab, EnqueteDetail } from './Dashboard'
 
 const STATUTS = [
@@ -1261,25 +1261,9 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
                 .map(enqSeg => (
                   <div key={enqSeg.enquete_id}>
                     {enqSeg.segmentations.map(seg => (
-                      <div key={seg.id} className="mb-4">
-                        <p className="text-sm font-medium text-[#374151] mb-2">{seg.nom}</p>
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                          {seg.quotas.slice(0, 8).map(q => {
-                            const pct = q.objectif > 0 ? Math.round(((q.valides || 0) / q.objectif) * 100) : 0
-                            return (
-                            <div key={q.id} className="p-2 bg-[#F9FAFB] rounded-lg">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs text-[#374151] truncate">{q.segment_value}</span>
-                                <span className="text-xs font-semibold" style={{ color: pct >= 100 ? '#059669' : pct >= 50 ? '#D97706' : '#DC2626' }}>{pct}%</span>
-                              </div>
-                              <p className="text-xs text-[#9CA3AF]">{q.valides || 0} / {q.objectif || 0}</p>
-                            </div>
-                          )})}
-
-                        </div>
-                        {seg.quotas.length > 8 && (
-                          <p className="text-xs text-[#9CA3AF] mt-2">+ {seg.quotas.length - 8} autres</p>
-                        )}
+                      <div key={seg.id} className="mb-6">
+                        <p className="text-sm font-semibold text-[#374151] mb-2">{seg.nom}</p>
+                        <QuotaTable quotas={seg.quotas} compact />
                       </div>
                     ))}
                   </div>
@@ -1896,36 +1880,50 @@ function QuotaConfigCard({ config, onDelete }) {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-[#E5E7EB]">
+                <tr className="bg-[#1F2937]">
                   {(config.questions || []).map(q => (
-                    <th key={q.id} className="text-left py-2 px-3 text-xs font-medium text-[#6B7280]">
+                    <th key={q.id} className="text-left py-2 px-3 text-xs font-semibold text-white">
                       {q.segmentations?.nom}
                     </th>
                   ))}
-                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">%</th>
-                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Objectif</th>
-                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Complétés</th>
-                  <th className="text-right py-2 px-3 text-xs font-medium text-[#6B7280]">Progression</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-white">Quota %</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-white">Objectif</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-white">Réalisé</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-white">Écart</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-white">% Atteint</th>
+                  <th className="py-2 px-3 text-xs font-semibold text-white">Progression</th>
                 </tr>
               </thead>
               <tbody>
                 {quotas.map((q, i) => {
                   const combo = q.combination || {}
-                  const pct = q.progression || 0
+                  const obj = q.objectif || 0
+                  const val = q.completions || 0
+                  const ecart = val - obj
+                  const pctAtteint = obj > 0 ? Math.round((val / obj) * 100) : (val > 0 ? 999 : 0)
+                  const barPct = Math.min(pctAtteint, 100)
+                  const ecartColor = ecart >= 0 ? '#059669' : '#DC2626'
+                  const attColor = pctAtteint >= 100 ? '#059669' : pctAtteint >= 60 ? '#D97706' : '#DC2626'
                   return (
-                    <tr key={i} className="border-b border-[#F3F4F6] hover:bg-white">
+                    <tr key={i} className={`${i % 2 === 0 ? 'bg-[#F9FAFB]' : 'bg-white'} hover:bg-[#F3F4F6]`}>
                       {(config.questions || []).map(qq => (
                         <td key={qq.id} className="py-2 px-3 text-[#111827]">
                           {combo[qq.segmentations?.nom] || '-'}
                         </td>
                       ))}
-                      <td className="py-2 px-3 text-right font-mono text-[#6B7280]">{q.pourcentage}%</td>
-                      <td className="py-2 px-3 text-right font-mono text-[#111827]">{q.objectif}</td>
-                      <td className="py-2 px-3 text-right font-mono text-[#059669]">{q.completions}</td>
-                      <td className="py-2 px-3 text-right">
-                        <span className="text-xs font-semibold" style={{ color: pct >= 100 ? '#059669' : pct >= 50 ? '#D97706' : '#DC2626' }}>
-                          {Math.round(pct)}%
-                        </span>
+                      <td className="py-2 px-3 text-center font-mono text-[#6B7280]">{q.pourcentage}%</td>
+                      <td className="py-2 px-3 text-center font-mono text-[#111827]">{obj}</td>
+                      <td className="py-2 px-3 text-center font-mono" style={{ color: '#059669' }}>{val}</td>
+                      <td className="py-2 px-3 text-center font-mono font-semibold" style={{ color: ecartColor }}>
+                        {ecart > 0 ? '+' : ''}{ecart}
+                      </td>
+                      <td className="py-2 px-3 text-center font-semibold" style={{ color: attColor }}>
+                        {pctAtteint}%
+                      </td>
+                      <td className="py-2 px-3 w-28">
+                        <div className="h-2 bg-[#E5E7EB] rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${barPct}%`, backgroundColor: attColor }} />
+                        </div>
                       </td>
                     </tr>
                   )
@@ -2233,25 +2231,21 @@ function SegmentationCard({ segmentation, isExpanded, onToggle, onDelete }) {
               {quotas.length === 0 ? (
                 <p className="text-sm text-[#9CA3AF] text-center py-4">Aucun quota defini</p>
               ) : (
-                <div className="space-y-2">
-                  {[...quotas].sort((a, b) => (b.pourcentage || 0) - (a.pourcentage || 0)).map(q => {
-                    const pct = q.objectif > 0 ? Math.round(((q.valides || 0) / q.objectif) * 100) : 0
-                    return (
-                    <div key={q.id} className="flex items-center gap-3 p-2 bg-white rounded-lg">
-                      <span className="flex-1 text-sm text-[#111827]">{q.segment_value}</span>
-                      <span className="text-xs text-[#9CA3AF]">{q.pourcentage}%</span>
-                      <span className="text-sm font-mono text-[#059669] w-24 text-right">{q.valides || 0}/{q.objectif || 0}</span>
-                      <span className="text-xs font-semibold w-10 text-right" style={{ color: pct >= 100 ? '#059669' : pct >= 50 ? '#D97706' : '#DC2626' }}>{pct}%</span>
-                      <ProgressBar value={q.valides || 0} max={q.objectif || 1} size="sm" className="w-20" />
+                <>
+                  <QuotaTable quotas={quotas} />
+                  <div className="flex justify-end mt-2 gap-1">
+                    {quotas.map(q => (
                       <button
+                        key={q.id}
                         onClick={() => handleDeleteQuota(q.id)}
-                        className="p-1 rounded hover:bg-[#FEF2F2] text-[#DC2626]"
+                        className="p-1 rounded hover:bg-[#FEF2F2] text-[#DC2626] text-[10px]"
+                        title={`Supprimer ${q.segment_value}`}
                       >
                         <TrashIcon />
                       </button>
-                    </div>
-                  )})}
-                </div>
+                    ))}
+                  </div>
+                </>
               )}
             </>
           )}
