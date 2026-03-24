@@ -1209,9 +1209,14 @@ function DashboardView({ dashboard, enquetes, enqueteurs, allAffectations, segme
                     {enq.statut === 'en_cours' ? 'En cours' : enq.statut === 'termine' ? 'Termine' : 'Archive'}
                   </Badge>
                 </div>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-[#F5F3FF] text-[#7C3AED] font-medium">
-                  Conv: {enq.tauxConversion}%
-                </span>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#059669] font-medium">
+                    Prog: {enq.pct}%
+                  </span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-[#F5F3FF] text-[#7C3AED] font-medium">
+                    Conv: {enq.tauxConversion}%
+                  </span>
+                </div>
               </div>
               <p className="text-sm font-medium text-[#111827] mb-2 truncate">{enq.nom}</p>
               <ProgressBar value={enq.valides} max={enq.total_objectif} size="sm" />
