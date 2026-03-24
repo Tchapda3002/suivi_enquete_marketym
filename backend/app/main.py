@@ -214,6 +214,12 @@ _COUNTRY_ALIASES = {
     "Cote dIvoire": "Côte d'Ivoire",
     "Cote d'Ivoire": "Côte d'Ivoire",
     "Cote d Ivoire": "Côte d'Ivoire",
+    # Variantes selon les surveys
+    "Guinée Équatoriale": "Guinée Équat.",
+    "Guinee Equatoriale": "Guinée Équat.",
+    "Guinée Equatoriale": "Guinée Équat.",
+    "Centrafrique": "RCA",
+    "Guinée": "Guinée Équat.",
 }
 
 def normalize_segment_value(text: str) -> str:
