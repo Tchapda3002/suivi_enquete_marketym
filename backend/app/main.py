@@ -304,7 +304,7 @@ def compute_quotas_for_segmentation(
         pourcentage = q.get("pourcentage") or 0
         objectif = int(objectif_total * pourcentage / 100)
         completions_brut = completions_map.get(ao_id, 0)
-        completions = min(completions_brut, objectif) if objectif > 0 else completions_brut
+        completions = completions_brut
         result.append({
             "id": q["id"],
             "answer_option_id": ao_id,
@@ -603,7 +603,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
                 pourcentage = q.get("pourcentage") or 0
                 objectif = int(objectif_total_aff * pourcentage / 100)
                 completions_brut = rc_map.get(ao_id, 0)
-                completions = min(completions_brut, objectif) if objectif > 0 else completions_brut
+                completions = completions_brut
                 total_objectif += objectif
                 total_completions += completions
                 quotas_enriched.append({
@@ -614,7 +614,7 @@ def get_enqueteur_segmentations(id: str, sb: Client = Depends(get_supabase)):
                     "completions": completions,
                 })
             quotas_enriched.sort(key=lambda x: x["objectif"], reverse=True)
-            total_completions = min(total_completions, objectif_total_aff)
+            # total_completions non cappé pour afficher le réel
 
             enquete_segs.append({
                 "id": seg_id,
@@ -1114,8 +1114,11 @@ def get_quotas_by_segmentation(segmentation_id: str, admin: dict = Depends(requi
     enquete_id = seg_info.data[0]["enquete_id"]
 
     affectations = sb.table("affectations").select("id, objectif_total").eq("enquete_id", enquete_id).execute()
-    objectif_total_enquete = sum(a.get("objectif_total") or 0 for a in affectations.data)
     aff_ids = [a["id"] for a in affectations.data]
+    # Utiliser taille_echantillon si défini, sinon fallback sur somme des affectations
+    enq_info = sb.table("enquetes").select("taille_echantillon").eq("id", enquete_id).execute()
+    taille = (enq_info.data[0].get("taille_echantillon") or 0) if enq_info.data else 0
+    objectif_total_enquete = taille if taille > 0 else sum(a.get("objectif_total") or 0 for a in affectations.data)
 
     return compute_quotas_for_segmentation(sb, segmentation_id, objectif_total_enquete, aff_ids)
 
@@ -1127,7 +1130,10 @@ def get_quotas_by_enquete(enquete_id: str, admin: dict = Depends(require_admin),
         return []
 
     affectations = sb.table("affectations").select("id, objectif_total").eq("enquete_id", enquete_id).execute()
-    objectif_total = sum(a.get("objectif_total") or 0 for a in affectations.data)
+    # Utiliser taille_echantillon si défini
+    enq_info = sb.table("enquetes").select("taille_echantillon").eq("id", enquete_id).execute()
+    taille = (enq_info.data[0].get("taille_echantillon") or 0) if enq_info.data else 0
+    objectif_total = taille if taille > 0 else sum(a.get("objectif_total") or 0 for a in affectations.data)
 
     result = []
     for seg in segs.data:
@@ -1331,7 +1337,9 @@ def get_quota_groups_by_enquete(enquete_id: str, admin: dict = Depends(require_a
 
     affectations = sb.table("affectations").select("id, objectif_total").eq("enquete_id", enquete_id).execute()
     aff_ids = [a["id"] for a in affectations.data]
-    objectif_total_enquete = sum(a.get("objectif_total") or 0 for a in affectations.data)
+    enq_info = sb.table("enquetes").select("taille_echantillon").eq("id", enquete_id).execute()
+    taille = (enq_info.data[0].get("taille_echantillon") or 0) if enq_info.data else 0
+    objectif_total_enquete = taille if taille > 0 else sum(a.get("objectif_total") or 0 for a in affectations.data)
 
     result = []
     for grp in groups.data:
@@ -1636,26 +1644,46 @@ async def sync_affectation(
         except Exception as e:
             print(f"[sync] Erreur fetch questions {target_sid}: {e}")
 
-    # Résolution question_id pour l'ancien système
-    if is_ancien_systeme and segmentations_list and target_questions:
+    # Résolution question_id : si le qid stocké ne correspond pas à une question
+    # du survey cible, on résout par texte ou par chevauchement des answer_options.
+    # Nécessaire quand le question_id vient d'un survey historique différent du principal.
+    if segmentations_list and target_questions:
+        target_qids = {str(q.get("id", "")) for q in target_questions}
         indiv_qid_by_text = {q["text"].strip().lower(): q["id"] for q in target_questions}
         for seg in segmentations_list:
+            stored_qid = str(seg.get("question_id", ""))
+            # Si le qid stocké existe dans le survey cible, pas besoin de résoudre
+            if stored_qid in target_qids and not is_ancien_systeme:
+                continue
             seg_text = (seg.get("question_text") or seg.get("nom") or "").strip().lower()
+            # Match exact par texte
             if seg_text in indiv_qid_by_text:
                 seg["_resolved_qid"] = indiv_qid_by_text[seg_text]
-            else:
-                # Match par chevauchement des answer_options
-                seg_options = {normalize_segment_value(o.get("text", "")).lower()
-                               for o in (seg.get("answer_options") or []) if o.get("text")}
-                if seg_options:
-                    best_qid, best_overlap = None, 0
-                    for q in target_questions:
-                        q_options = {a["text"].strip().lower() for a in q.get("answers", [])}
-                        overlap = len(seg_options & q_options)
-                        if overlap > best_overlap:
-                            best_overlap, best_qid = overlap, q["id"]
-                    if best_overlap >= 2:
-                        seg["_resolved_qid"] = best_qid
+                continue
+            # Match partiel : le texte QP contient le texte de la segmentation
+            if seg_text:
+                for q_text, q_id in indiv_qid_by_text.items():
+                    if seg_text in q_text or q_text in seg_text:
+                        seg["_resolved_qid"] = q_id
+                        break
+                if "_resolved_qid" in seg:
+                    continue
+            # Match par chevauchement des answer_options (JSONB ou table answer_options)
+            seg_options = {normalize_segment_value(o.get("text", "")).lower()
+                           for o in (seg.get("answer_options") or []) if o.get("text")}
+            # Fallback : charger depuis la table answer_options si JSONB vide
+            if not seg_options and seg.get("id"):
+                ao_res = sb.table("answer_options").select("valeur").eq("segmentation_id", seg["id"]).execute()
+                seg_options = {v["valeur"].strip().lower() for v in (ao_res.data or []) if v.get("valeur")}
+            if seg_options:
+                best_qid, best_overlap = None, 0
+                for q in target_questions:
+                    q_options = {a["text"].strip().lower() for a in q.get("answers", [])}
+                    overlap = len(seg_options & q_options)
+                    if overlap > best_overlap:
+                        best_overlap, best_qid = overlap, q["id"]
+                if best_overlap >= 2:
+                    seg["_resolved_qid"] = best_qid
 
     # 6. Compter les réponses par segmentation
     seg_ids = [seg["id"] for seg in segmentations_list if seg.get("id")]
@@ -1895,7 +1923,7 @@ def get_stats_segments(admin: dict = Depends(require_admin), sb: Client = Depend
 @app.get("/admin/segmentations-stats")
 def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     """Stats segmentations par enquête avec completions (depuis response_counts)."""
-    enquetes = sb.table("enquetes").select("id, code, nom").execute()
+    enquetes = sb.table("enquetes").select("id, code, nom, taille_echantillon").execute()
     all_affectations = sb.table("affectations").select("id, enquete_id, objectif_total").execute()
     aff_by_enquete: Dict[str, list] = {}
     for a in all_affectations.data:
@@ -1914,7 +1942,8 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
     for enq in enquetes.data:
         enquete_id = enq["id"]
         affectations_enq = aff_by_enquete.get(enquete_id, [])
-        objectif_total_enquete = sum(a.get("objectif_total") or 0 for a in affectations_enq)
+        taille = enq.get("taille_echantillon") or 0
+        objectif_total_enquete = taille if taille > 0 else sum(a.get("objectif_total") or 0 for a in affectations_enq)
         aff_ids = [a["id"] for a in affectations_enq]
 
         # Agréger response_counts par answer_option_id pour cette enquête
@@ -1947,7 +1976,7 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
                 pourcentage = q.get("pourcentage") or 0
                 objectif = int(objectif_total_enquete * pourcentage / 100)
                 completions_brut = rc_by_ao.get(ao_id, 0)
-                completions = min(completions_brut, objectif) if objectif > 0 else completions_brut
+                completions = completions_brut
                 quotas_liste.append({
                     "segment_value": ao_labels_local.get(ao_id, ""),
                     "pourcentage": pourcentage,
@@ -1956,7 +1985,7 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
                 })
             quotas_liste.sort(key=lambda x: x["pourcentage"], reverse=True)
 
-            total_valides = min(sum(q["valides"] for q in quotas_liste), objectif_total_enquete)
+            total_valides = sum(q["valides"] for q in quotas_liste)
             enquete_segs.append({
                 "id": seg_id,
                 "nom": seg["nom"],
