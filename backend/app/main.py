@@ -103,9 +103,13 @@ def get_supabase():
     global _db_client
     if _db_client is None:
         if settings.DATABASE_URL:
-            from .db import DirectClient
-            _db_client = DirectClient(settings.DATABASE_URL)
-            print("[db] Connexion PostgreSQL directe active")
+            try:
+                from .db import DirectClient
+                _db_client = DirectClient(settings.DATABASE_URL)
+                print("[db] Connexion PostgreSQL directe active")
+            except Exception as e:
+                print(f"[db] ERREUR connexion directe: {e} — fallback REST")
+                _db_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
         else:
             _db_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
             print("[db] Client REST Supabase (fallback)")
