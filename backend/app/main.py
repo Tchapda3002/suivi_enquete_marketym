@@ -1572,15 +1572,30 @@ async def sync_affectation(
         await add_all(survey_id_affectation)
 
     if is_fourre_tout:
-        other_tokens_res = sb.table("affectations")\
-            .select("enqueteurs(token)")\
+        # Déduplication : seule la première affectation (par created_at) de fourre_tout
+        # sur cette enquête récupère les orphelins. Les autres → filtrage normal par token.
+        my_affs = sb.table("affectations")\
+            .select("id, created_at")\
             .eq("enquete_id", enquete_id)\
-            .neq("enqueteur_id", aff["enqueteur_id"]).execute()
-        known_tokens = {(a.get("enqueteurs") or {}).get("token")
-                        for a in other_tokens_res.data if (a.get("enqueteurs") or {}).get("token")}
-        await add_fourre_tout(survey_id_enquete, known_tokens)
-        for old_sid in survey_ids_historique:
-            await add_fourre_tout(str(old_sid), known_tokens)
+            .eq("enqueteur_id", aff["enqueteur_id"])\
+            .order("created_at").execute()
+        is_primary = (my_affs.data and my_affs.data[0]["id"] == affectation_id)
+
+        if is_primary:
+            other_tokens_res = sb.table("affectations")\
+                .select("enqueteurs(token)")\
+                .eq("enquete_id", enquete_id)\
+                .neq("enqueteur_id", aff["enqueteur_id"]).execute()
+            known_tokens = {(a.get("enqueteurs") or {}).get("token")
+                            for a in other_tokens_res.data if (a.get("enqueteurs") or {}).get("token")}
+            await add_fourre_tout(survey_id_enquete, known_tokens)
+            for old_sid in survey_ids_historique:
+                await add_fourre_tout(str(old_sid), known_tokens)
+        else:
+            # Affectation secondaire : ne récupérer que les réponses avec son token
+            await add_filtered(survey_id_enquete, enqueteur_token)
+            for old_sid in survey_ids_historique:
+                await add_filtered(str(old_sid), enqueteur_token)
     else:
         await add_filtered(survey_id_enquete, enqueteur_token)
         for old_sid in survey_ids_historique:
