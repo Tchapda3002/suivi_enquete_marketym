@@ -114,42 +114,30 @@ export default function Admin() {
     const dr = range || dateRange
     try {
       const userId = adminId || adminUser?.id
-      // Charger les données principales
-      const [d, e, enq, segStats, hist, affs, dem] = await Promise.all([
+      // Tout charger en un seul batch parallele (10 appels simultanes au lieu de 7+3 sequentiels)
+      const results = await Promise.allSettled([
         getDashboard(),
         listEnquetes(),
         listEnqueteurs(),
         getSegmentationsStats(),
         getHistoriqueGlobal({ from_date: dr.from_date, to_date: dr.to_date }),
         listAffectations(),
-        getDemandesAdmin()
+        getDemandesAdmin(),
+        userId ? getEnqueteur(userId) : Promise.resolve(null),
+        userId ? getEnqueteurSegmentations(userId) : Promise.resolve([]),
+        userId ? getHistoriqueEnqueteur(userId, { from_date: dr.from_date, to_date: dr.to_date }) : Promise.resolve([])
       ])
-      setDashboard(d)
-      setEnquetes(e)
-      setEnqueteurs(enq)
-      setSegmentationsStats(segStats)
-      setHistorique(hist || [])
-      setAllAffectations(affs || [])
-      setDemandes(dem || [])
-
-      // Charger les données "Mes enquetes" separement (pour ne pas bloquer si erreur)
-      if (userId) {
-        try {
-          const [adminData, adminSegs, adminHist] = await Promise.all([
-            getEnqueteur(userId),
-            getEnqueteurSegmentations(userId),
-            getHistoriqueEnqueteur(userId, { from_date: dr.from_date, to_date: dr.to_date })
-          ])
-          setAdminAffectations(adminData?.affectations || [])
-          setAdminSegmentations(adminSegs || [])
-          setAdminHistorique(adminHist || [])
-        } catch (err) {
-          console.error('Erreur chargement Mes enquetes:', err)
-          setAdminAffectations([])
-          setAdminSegmentations([])
-          setAdminHistorique([])
-        }
-      }
+      const v = (i) => results[i].status === 'fulfilled' ? results[i].value : null
+      setDashboard(v(0))
+      setEnquetes(v(1) || [])
+      setEnqueteurs(v(2) || [])
+      setSegmentationsStats(v(3) || [])
+      setHistorique(v(4) || [])
+      setAllAffectations(v(5) || [])
+      setDemandes(v(6) || [])
+      setAdminAffectations(v(7)?.affectations || [])
+      setAdminSegmentations(v(8) || [])
+      setAdminHistorique(v(9) || [])
     } catch (err) {
       console.error('Erreur chargement dashboard:', err)
     } finally {

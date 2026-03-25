@@ -415,7 +415,7 @@ def get_client_ip(request: Request) -> str:
 @app.get("/r/{affectation_id}")
 async def track_and_redirect(affectation_id: str, request: Request, sb: Client = Depends(get_supabase)):
     aff = sb.table("affectations")\
-        .select("id, lien_direct, lien_questionnaire, survey_id, enqueteur_id")\
+        .select("id, lien_direct, lien_questionnaire, survey_id, enqueteur_id, clics")\
         .eq("id", affectation_id).execute()
     if not aff.data:
         raise HTTPException(status_code=404, detail="Lien invalide")
@@ -433,9 +433,9 @@ async def track_and_redirect(affectation_id: str, request: Request, sb: Client =
             "user_agent": user_agent,
             "statut": "clique"
         }).execute()
-        clics_count = sb.table("clics").select("id", count="exact")\
-            .eq("affectation_id", affectation_id).execute()
-        sb.table("affectations").update({"clics": clics_count.count})\
+        # Incrémenter le compteur directement (pas de count(*) sur toute la table)
+        current = affectation.get("clics") or 0
+        sb.table("affectations").update({"clics": current + 1})\
             .eq("id", affectation_id).execute()
     except Exception as e:
         if "duplicate" not in str(e).lower() and "unique" not in str(e).lower():
@@ -1045,11 +1045,16 @@ async def migrate_affectation_links(request: Request, admin: dict = Depends(requ
 @app.get("/admin/segmentations/by-enquete/{enquete_id}")
 def get_segmentations_by_enquete(enquete_id: str, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     segs = sb.table("segmentations").select("*").eq("enquete_id", enquete_id).execute()
-    # Enrichir avec les answer_options depuis la table answer_options
+    seg_ids = [s["id"] for s in segs.data]
+    # Bulk load answer_options (1 query au lieu de N)
+    ao_by_seg: Dict[str, list] = {}
+    if seg_ids:
+        ao_res = sb.table("answer_options").select("id, segmentation_id, valeur, valeur_display, qp_answer_id, position")\
+            .in_("segmentation_id", seg_ids).order("position").execute()
+        for ao in ao_res.data:
+            ao_by_seg.setdefault(ao["segmentation_id"], []).append(ao)
     for seg in segs.data:
-        ao_res = sb.table("answer_options").select("id, valeur, valeur_display, qp_answer_id, position")\
-            .eq("segmentation_id", seg["id"]).order("position").execute()
-        seg["answer_options_list"] = ao_res.data
+        seg["answer_options_list"] = ao_by_seg.get(seg["id"], [])
     return segs.data
 
 @app.post("/admin/segmentations")
@@ -1128,28 +1133,36 @@ def get_quotas_by_enquete(enquete_id: str, admin: dict = Depends(require_admin),
     segs = sb.table("segmentations").select("id, nom").eq("enquete_id", enquete_id).execute()
     if not segs.data:
         return []
+    seg_ids = [s["id"] for s in segs.data]
 
     affectations = sb.table("affectations").select("id, objectif_total").eq("enquete_id", enquete_id).execute()
-    # Utiliser taille_echantillon si défini
     enq_info = sb.table("enquetes").select("taille_echantillon").eq("id", enquete_id).execute()
     taille = (enq_info.data[0].get("taille_echantillon") or 0) if enq_info.data else 0
     objectif_total = taille if taille > 0 else sum(a.get("objectif_total") or 0 for a in affectations.data)
 
+    # Bulk load quotas + answer_options (2 queries au lieu de 2N)
+    all_quotas = sb.table("quotas").select("id, segmentation_id, answer_option_id, pourcentage")\
+        .in_("segmentation_id", seg_ids).is_("affectation_id", "null").execute()
+    quotas_by_seg: Dict[str, list] = {}
+    all_ao_ids = set()
+    for q in all_quotas.data:
+        quotas_by_seg.setdefault(q["segmentation_id"], []).append(q)
+        if q.get("answer_option_id"):
+            all_ao_ids.add(q["answer_option_id"])
+
+    ao_labels: Dict[str, str] = {}
+    if all_ao_ids:
+        ao_res = sb.table("answer_options").select("id, valeur").in_("id", list(all_ao_ids)).execute()
+        ao_labels = {ao["id"]: ao["valeur"] for ao in ao_res.data}
+
     result = []
     for seg in segs.data:
         seg_id = seg["id"]
-        quotas_res = sb.table("quotas").select("id, answer_option_id, pourcentage")\
-            .eq("segmentation_id", seg_id).is_("affectation_id", "null").execute()
-
-        ao_ids = [q["answer_option_id"] for q in quotas_res.data if q.get("answer_option_id")]
-        ao_labels = {}
-        if ao_ids:
-            ao_res = sb.table("answer_options").select("id, valeur").in_("id", ao_ids).execute()
-            ao_labels = {ao["id"]: ao["valeur"] for ao in ao_res.data}
+        seg_quotas = quotas_by_seg.get(seg_id, [])
 
         quotas_liste = []
         total_pourcentage = 0
-        for q in quotas_res.data:
+        for q in seg_quotas:
             ao_id = q.get("answer_option_id")
             pct = q.get("pourcentage") or 0
             total_pourcentage += pct
@@ -1616,13 +1629,16 @@ async def sync_affectation(
             .eq("affectation_id", affectation_id).execute()
         existing_statuts = {c["ip_address"]: c.get("statut", "clique")
                             for c in (existing_clics.data or [])}
+        clics_batch = []
         for ip, status in ip_status.items():
             if STATUS_RANK.get(status, 0) >= STATUS_RANK.get(existing_statuts.get(ip, ""), 0):
-                sb.table("clics").upsert({
+                clics_batch.append({
                     "affectation_id": affectation_id,
                     "ip_address": ip,
                     "statut": status,
-                }, on_conflict="affectation_id,ip_address").execute()
+                })
+        if clics_batch:
+            sb.table("clics").upsert(clics_batch, on_conflict="affectation_id,ip_address").execute()
 
     clics_data = sb.table("clics").select("statut").eq("affectation_id", affectation_id).execute()
     clics_count = len(clics_data.data)
@@ -1751,42 +1767,44 @@ async def sync_affectation(
         if seg_id:
             segment_counts_by_seg[seg_id] = counts
 
-    # 7. Écrire dans response_counts (nouveau modèle)
-    # Supprimer les anciens compteurs de cette affectation pour les segmentations concernées
-    if seg_ids:
-        all_ao_ids_for_segs = []
-        for seg_id in seg_ids:
-            ao_res = sb.table("answer_options").select("id").eq("segmentation_id", seg_id).execute()
-            all_ao_ids_for_segs.extend(ao["id"] for ao in ao_res.data)
-        if all_ao_ids_for_segs:
-            sb.table("response_counts").delete()\
-                .eq("affectation_id", affectation_id)\
-                .in_("answer_option_id", all_ao_ids_for_segs)\
-                .execute()
+    # 7. Écrire dans response_counts (nouveau modèle) - BATCH
+    # Utiliser ao_map déjà chargé pour résoudre les IDs (0 query supplémentaire)
+    all_ao_ids_for_segs = []
+    for sid in seg_ids:
+        seg_ao = ao_map.get(sid, {})
+        all_ao_ids_for_segs.extend(v for k, v in seg_ao.items() if not k.startswith("__qp__"))
+    if all_ao_ids_for_segs:
+        sb.table("response_counts").delete()\
+            .eq("affectation_id", affectation_id)\
+            .in_("answer_option_id", all_ao_ids_for_segs)\
+            .execute()
 
     segment_counts_normalized: Dict[str, int] = {}
+    rc_batch = []
+    now_iso = datetime.utcnow().isoformat()
     for seg in segmentations_list:
         seg_id = seg.get("id")
         if not seg_id:
             continue
         counts = segment_counts_by_seg.get(seg_id, {})
-        seg_ao_map = ao_map.get(seg_id, {})  # {valeur: ao_id}
+        seg_ao_map = ao_map.get(seg_id, {})
         for val, count in counts.items():
             ao_id = seg_ao_map.get(val)
             if not ao_id:
-                # Essayer avec normalisation (cas limite)
                 ao_id = seg_ao_map.get(normalize_segment_value(val))
             if ao_id and count > 0:
-                try:
-                    sb.table("response_counts").upsert({
-                        "affectation_id": affectation_id,
-                        "answer_option_id": ao_id,
-                        "count": count,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }, on_conflict="affectation_id,answer_option_id").execute()
-                except Exception as e:
-                    print(f"[sync] Erreur response_counts: {e}")
+                rc_batch.append({
+                    "affectation_id": affectation_id,
+                    "answer_option_id": ao_id,
+                    "count": count,
+                    "updated_at": now_iso,
+                })
             segment_counts_normalized[val] = segment_counts_normalized.get(val, 0) + count
+    if rc_batch:
+        try:
+            sb.table("response_counts").upsert(rc_batch, on_conflict="affectation_id,answer_option_id").execute()
+        except Exception as e:
+            print(f"[sync] Erreur batch response_counts: {e}")
 
     completions_enqueteur = len(enqueteur_responses)
 
@@ -1809,14 +1827,12 @@ async def sync_affectation(
                 daily_counts[date] = daily_counts.get(date, 0) + 1
 
         sb.table("historique_completions").delete().eq("affectation_id", affectation_id).execute()
-        for date, count in daily_counts.items():
-            sb.table("historique_completions").upsert({
-                "date": date,
-                "affectation_id": affectation_id,
-                "enquete_id": enquete_id,
-                "completions": count,
-                "clics": 0,
-            }, on_conflict="date,enquete_id,affectation_id").execute()
+        if daily_counts:
+            hist_batch = [{"date": date, "affectation_id": affectation_id,
+                           "enquete_id": enquete_id, "completions": count, "clics": 0}
+                          for date, count in daily_counts.items()]
+            sb.table("historique_completions").upsert(
+                hist_batch, on_conflict="date,enquete_id,affectation_id").execute()
 
     # 10. Quotas croisés → response_combinations
     if enquete_id:
@@ -1953,6 +1969,30 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
         for rc in rc_res.data:
             all_rc.setdefault(rc["affectation_id"], []).append(rc)
 
+    # Bulk load : segmentations, quotas, answer_options (0 queries en boucle)
+    enquete_ids = [e["id"] for e in enquetes.data]
+    all_segs_res = sb.table("segmentations").select("id, enquete_id, nom, question_text")\
+        .in_("enquete_id", enquete_ids).execute() if enquete_ids else type('R', (), {'data': []})()
+    segs_by_enquete: Dict[str, list] = {}
+    all_seg_ids = []
+    for s in all_segs_res.data:
+        segs_by_enquete.setdefault(s["enquete_id"], []).append(s)
+        all_seg_ids.append(s["id"])
+
+    all_quotas_res = sb.table("quotas").select("id, segmentation_id, answer_option_id, pourcentage")\
+        .in_("segmentation_id", all_seg_ids).is_("affectation_id", "null").execute() if all_seg_ids else type('R', (), {'data': []})()
+    quotas_by_seg: Dict[str, list] = {}
+    all_ao_ids_set: set = set()
+    for q in all_quotas_res.data:
+        quotas_by_seg.setdefault(q["segmentation_id"], []).append(q)
+        if q.get("answer_option_id"):
+            all_ao_ids_set.add(q["answer_option_id"])
+
+    all_ao_labels: Dict[str, str] = {}
+    if all_ao_ids_set:
+        ao_res = sb.table("answer_options").select("id, valeur").in_("id", list(all_ao_ids_set)).execute()
+        all_ao_labels = {ao["id"]: ao["valeur"] for ao in ao_res.data}
+
     result = []
     for enq in enquetes.data:
         enquete_id = enq["id"]
@@ -1961,42 +2001,32 @@ def get_segmentations_stats(admin: dict = Depends(require_admin), sb: Client = D
         objectif_total_enquete = taille if taille > 0 else sum(a.get("objectif_total") or 0 for a in affectations_enq)
         aff_ids = [a["id"] for a in affectations_enq]
 
-        # Agréger response_counts par answer_option_id pour cette enquête
         rc_by_ao: Dict[str, int] = {}
         for aff_id in aff_ids:
             for rc in all_rc.get(aff_id, []):
                 ao_id = rc["answer_option_id"]
                 rc_by_ao[ao_id] = rc_by_ao.get(ao_id, 0) + (rc.get("count") or 0)
 
-        segmentations = sb.table("segmentations").select("id, nom, question_text")\
-            .eq("enquete_id", enquete_id).execute()
-
         enquete_segs = []
-        for seg in segmentations.data:
+        for seg in segs_by_enquete.get(enquete_id, []):
             seg_id = seg["id"]
-            quotas_res = sb.table("quotas").select("id, answer_option_id, pourcentage")\
-                .eq("segmentation_id", seg_id).is_("affectation_id", "null").execute()
-
-            ao_ids = [q["answer_option_id"] for q in quotas_res.data if q.get("answer_option_id")]
+            seg_quotas = quotas_by_seg.get(seg_id, [])
+            ao_ids = [q["answer_option_id"] for q in seg_quotas if q.get("answer_option_id")]
             if not ao_ids:
                 continue
-            ao_res = sb.table("answer_options").select("id, valeur").in_("id", ao_ids).execute()
-            ao_labels_local = {ao["id"]: ao["valeur"] for ao in ao_res.data}
 
             quotas_liste = []
-            for q in quotas_res.data:
+            for q in seg_quotas:
                 ao_id = q.get("answer_option_id")
                 if not ao_id:
                     continue
                 pourcentage = q.get("pourcentage") or 0
                 objectif = int(objectif_total_enquete * pourcentage / 100)
-                completions_brut = rc_by_ao.get(ao_id, 0)
-                completions = completions_brut
                 quotas_liste.append({
-                    "segment_value": ao_labels_local.get(ao_id, ""),
+                    "segment_value": all_ao_labels.get(ao_id, ""),
                     "pourcentage": pourcentage,
                     "objectif": objectif,
-                    "valides": completions,
+                    "valides": rc_by_ao.get(ao_id, 0),
                 })
             quotas_liste.sort(key=lambda x: x["pourcentage"], reverse=True)
 
