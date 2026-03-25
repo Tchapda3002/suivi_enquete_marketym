@@ -15,6 +15,9 @@ class Settings:
     SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
     SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "")
 
+    # PostgreSQL direct (optionnel - si defini, bypass l'API REST Supabase)
+    DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
+
     # QuestionPro
     QUESTIONPRO_API_KEY: str = os.environ.get("QUESTIONPRO_API_KEY", "")
     QUESTIONPRO_BASE_URL: str = "https://api.questionpro.com/a/api/v2"

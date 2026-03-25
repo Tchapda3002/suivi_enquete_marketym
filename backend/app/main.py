@@ -95,13 +95,21 @@ app.include_router(auth_router)
 
 QUESTIONPRO_BASE_URL = settings.QUESTIONPRO_BASE_URL
 
-_supabase_client: Client = None
+_db_client = None
 
-def get_supabase() -> Client:
-    global _supabase_client
-    if _supabase_client is None:
-        _supabase_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-    return _supabase_client
+def get_supabase():
+    """Retourne le client DB. Si DATABASE_URL est defini, utilise une connexion
+    PostgreSQL directe (~3ms/query). Sinon, fallback sur l'API REST Supabase (~100ms/query)."""
+    global _db_client
+    if _db_client is None:
+        if settings.DATABASE_URL:
+            from .db import DirectClient
+            _db_client = DirectClient(settings.DATABASE_URL)
+            print("[db] Connexion PostgreSQL directe active")
+        else:
+            _db_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            print("[db] Client REST Supabase (fallback)")
+    return _db_client
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SCHEMAS PYDANTIC
