@@ -213,25 +213,27 @@ class UpdateRoleRequest(BaseModel):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _COUNTRY_ALIASES = {
-    # Noms QP → valeur normalisée en base
-    "République du Congo": "Congo",
-    "Republique du Congo": "Congo",
-    "Congo-Brazzaville": "Congo",
+    # Noms QP → valeur normalisée en base (doit correspondre EXACTEMENT à answer_options.valeur)
+    # Congo-Brazzaville
+    "République du Congo": "Congo-Brazzaville",
+    "Republique du Congo": "Congo-Brazzaville",
+    "Congo": "Congo-Brazzaville",
+    # Centrafrique → RCA
     "République Centrafricaine": "RCA",
     "Republique Centrafricaine": "RCA",
+    "Centrafrique": "RCA",
+    # Guinée-Bissau
     "Guinée Bissau": "Guinée-Bissau",
     "Guinee Bissau": "Guinée-Bissau",
-    # QP renvoie "Côte dIvoire" (pas d'apostrophe) — alias obligatoire
+    # Côte d'Ivoire (QP envoie parfois sans apostrophe)
     "Côte dIvoire": "Côte d'Ivoire",
     "Cote dIvoire": "Côte d'Ivoire",
     "Cote d'Ivoire": "Côte d'Ivoire",
     "Cote d Ivoire": "Côte d'Ivoire",
-    # Variantes selon les surveys
-    "Guinée Équatoriale": "Guinée Équat.",
-    "Guinee Equatoriale": "Guinée Équat.",
-    "Guinée Equatoriale": "Guinée Équat.",
-    "Centrafrique": "RCA",
-    "Guinée": "Guinée Équat.",
+    # Guinée Équatoriale (variantes d'accents et abréviations)
+    "Guinée Équat.": "Guinée Équatoriale",
+    "Guinee Equatoriale": "Guinée Équatoriale",
+    "Guinée Equatoriale": "Guinée Équatoriale",
 }
 
 def normalize_segment_value(text: str) -> str:
