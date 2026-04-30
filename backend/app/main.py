@@ -519,7 +519,11 @@ def get_enqueteur(id: str, sb: Client = Depends(get_supabase)):
     for aff in affectations.data:
         aff_id = aff["id"]
         aff["completions_pays"] = completions_pays_map.get(aff_id, [])
-        aff["completions_valides"] = aff.get("completions_total", 0) or 0
+        # Si date_debut_vague est définie, l'enquêteur voit completions_vague
+        if aff.get("date_debut_vague"):
+            aff["completions_valides"] = aff.get("completions_vague", 0) or 0
+        else:
+            aff["completions_valides"] = aff.get("completions_total", 0) or 0
         aff["response_counts"] = rc_by_aff.get(aff_id, [])
 
         if not aff.get("lien_direct"):
@@ -1012,6 +1016,32 @@ def get_affectation_clics(id: str, admin: dict = Depends(require_admin), sb: Cli
         "clics": data,
     }
 
+@app.post("/admin/affectations/set-vague")
+def set_date_vague(data: dict, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+    """Définir la date de début de vague.
+    Body: { "enquete_id": "...", "date_debut_vague": "2026-04-27T00:00:00Z" }
+    ou { "affectation_id": "...", "date_debut_vague": "2026-04-27T00:00:00Z" }
+    Si date_debut_vague est null, on retire le filtre (tout s'affiche).
+    """
+    date_val = data.get("date_debut_vague")
+    enquete_id = data.get("enquete_id")
+    affectation_id = data.get("affectation_id")
+
+    if not enquete_id and not affectation_id:
+        raise HTTPException(status_code=400, detail="enquete_id ou affectation_id requis")
+
+    update_data = {"date_debut_vague": date_val, "completions_vague": 0}
+
+    if affectation_id:
+        sb.table("affectations").update(update_data).eq("id", affectation_id).execute()
+        return {"updated": 1, "scope": "affectation", "date_debut_vague": date_val}
+    else:
+        affs = sb.table("affectations").select("id").eq("enquete_id", enquete_id).execute()
+        for aff in affs.data:
+            sb.table("affectations").update(update_data).eq("id", aff["id"]).execute()
+        return {"updated": len(affs.data), "scope": "enquete", "date_debut_vague": date_val}
+
+
 @app.post("/admin/affectations/migrate-links")
 async def migrate_affectation_links(request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     affectations = sb.table("affectations")\
@@ -1479,6 +1509,13 @@ async def get_survey_info(survey_id: str, admin: dict = Depends(require_admin)):
 async def get_survey_questions(survey_id: str, admin: dict = Depends(require_admin)):
     return await fetch_survey_questions(survey_id)
 
+@app.get("/admin/questionpro/survey/{survey_id}/responses")
+async def get_survey_responses_endpoint(survey_id: str, admin: dict = Depends(require_admin)):
+    """Récupérer les réponses brutes d'un survey QuestionPro."""
+    responses = await fetch_survey_responses(survey_id)
+    completed = [r for r in responses if r.get("responseStatus") == "Completed"]
+    return completed
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ROUTES ADMIN - SYNCHRONISATION
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1527,7 +1564,7 @@ async def sync_affectation(
 
     # 1. Infos de l'affectation
     aff_info = sb.table("affectations")\
-        .select("id, enquete_id, survey_id, enqueteur_id, enqueteurs(token, identifiant), enquetes(survey_id, survey_ids_historique, segmentation_question_id)")\
+        .select("id, enquete_id, survey_id, enqueteur_id, date_debut_vague, enqueteurs(token, identifiant), enquetes(survey_id, survey_ids_historique, segmentation_question_id)")\
         .eq("id", affectation_id).execute()
     if not aff_info.data:
         return {"affectation_id": affectation_id, "error": "Affectation introuvable"}
@@ -1629,6 +1666,20 @@ async def sync_affectation(
             await add_filtered(str(old_sid), enqueteur_token)
 
     enqueteur_responses = [r for r in source_responses if r.get("responseStatus") == "Completed"]
+
+    # 2b. Filtrer par date_debut_vague pour le compteur vague
+    date_debut_vague = aff.get("date_debut_vague")
+    if date_debut_vague:
+        if isinstance(date_debut_vague, str):
+            # Supabase retourne ISO format, ex: "2026-04-27T00:00:00+00:00"
+            dv = date_debut_vague.replace("Z", "+00:00")
+            vague_ts = datetime.fromisoformat(dv).timestamp()
+        else:
+            vague_ts = date_debut_vague.timestamp()
+        vague_responses = [r for r in enqueteur_responses
+                           if (r.get("utctimestamp") or 0) >= vague_ts]
+    else:
+        vague_responses = enqueteur_responses
 
     # 3. Mettre à jour les statuts de clics
     ip_status: Dict[str, str] = {}
@@ -1821,10 +1872,12 @@ async def sync_affectation(
             print(f"[sync] Erreur batch response_counts: {e}")
 
     completions_enqueteur = len(enqueteur_responses)
+    completions_vague = len(vague_responses)
 
     # 8. Mettre à jour affectations
     sb.table("affectations").update({
         "completions_total": completions_enqueteur,
+        "completions_vague": completions_vague,
         "clics": clics_count,
         "demarre_total": demarre_count,
         "invalid_total": 0,
