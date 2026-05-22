@@ -41,10 +41,11 @@ npm run build        # Build production → dist/
 
 ### Backend (`/backend/app/`)
 - **`main.py`** (2163 lignes) - Fichier monolithique contenant TOUS les endpoints (admin, enqueteur, tracking, segmentations, quotas, sync QuestionPro). Pas de routeurs separees sauf pour l'auth.
+- **`db.py`** - DirectClient: wrapper PostgreSQL direct (psycopg2) avec API chainable compatible Supabase (.table().select().eq().execute()). ~3ms vs ~100ms par requete. Fallback automatique vers REST si connexion echoue.
 - **`auth/router.py`** (1067 lignes) - Endpoints d'authentification + dependance `require_admin`
 - **`auth/security.py`** - JWT, hash bcrypt, generation OTP
 - **`auth/email.py`** - Envoi emails via Brevo SDK
-- **`config.py`** - Settings depuis variables d'environnement (Supabase, QuestionPro, Brevo, JWT)
+- **`config.py`** - Settings depuis variables d'environnement (Supabase, QuestionPro, Brevo, JWT, DATABASE_URL)
 
 ### Frontend (`/frontend/src/`)
 - **`lib/api.js`** - Instance Axios avec intercepteur JWT automatique + toutes les fonctions API
@@ -242,6 +243,8 @@ Appliquer dans Supabase dans l'ordre :
 8. **UUID FK au lieu de text matching** - Le probleme core des statistiques incorrectes venait du matching texte (apostrophes U+2019 vs U+0027, accents, variantes de noms de pays). Nouveau modele: `answer_options` contient les valeurs normalisees, et `response_counts` lie par `answer_option_id UUID FK`. Plus jamais de matching texte a la requete.
 9. **Normalisation a l'insertion seulement** - `normalize_segment_value()` appliquee uniquement quand on insere dans `answer_options.valeur`. Toutes les comparaisons ulterieures sont par UUID.
 10. **Backward compatibility frontend** - Tous les contrats API frontend maintenus. `segment_value` toujours retourne (depuis `answer_options.valeur`). Memes URLs d'endpoints.
+11. **DirectClient PostgreSQL** - Connexion directe via psycopg2 au lieu de l'API REST Supabase pour les performances (~3ms vs ~100ms). Fallback automatique vers REST si DATABASE_URL absent ou connexion echouee.
+12. **Tarification progressive enqueteurs** - 850 FCFA (1-100), 900 FCFA (101-200), 1000 FCFA (201+) par enqueteur. Calcul cumulatif par tranches.
 
 ## Problemes Resolus
 
@@ -254,29 +257,23 @@ Appliquer dans Supabase dans l'ordre :
 | Clics surestimes (993 vs 227 reel) | Deduplication par IP unique par affectation |
 | Stats incorrectes: completions ne matchaient pas les quotas | Remodelisation complete DB: UUID FK au lieu de text matching (migrations 009+010) |
 | Apostrophes U+2019 / espaces insecables cassent le matching | Normalisation a l'insertion dans answer_options.valeur; comparaisons par UUID |
+| API Supabase REST lente (~100ms/requete) | DirectClient PostgreSQL direct via psycopg2 (~3ms/requete) avec fallback |
+| DirectClient: virgules dans parentheses cassent le parsing JOIN | Splitter parenthesis-aware avec tracking de profondeur |
 
 ## Derniere Session
-**Date**: 23 mars 2026
+**Date**: Avril-Mai 2026
 **Resume**:
-- Remodelisation complete de la base de donnees pour eliminer le text-matching fragile
-  - Nouvelle table `answer_options` : valeurs normalisees par segmentation (UNIQUE par valeur)
-  - Nouvelle table `response_counts` : completions par (affectation, answer_option) via UUID FK
-  - Nouvelles tables `quota_groups`, `quota_group_segmentations`, `quota_group_combinations` : remplacent quota_configs
-  - Nouvelle table `response_combinations` : completions par combinaison croisee
-  - Colonne `answer_option_id UUID FK` ajoutee a `quotas`
-  - Migration 009 : cree les nouvelles tables
-  - Migration 010 : migre les donnees existantes (completions_segments → response_counts, quota_configs → quota_groups)
-- Réécriture complete de `backend/app/main.py`
-  - `sync_affectation` : ecrit dans `response_counts` (UUID FK) au lieu de `completions_segments` (texte)
-  - `compute_quotas_for_segmentation` : JOIN sur response_counts par UUID, plus de matching texte
-  - `create_segmentation` : insere aussi dans `answer_options` (en plus du JSONB)
-  - `create_quota` / `create_quotas_bulk` : resolvent automatiquement `answer_option_id`
-  - `create_quota_group` : accepte {nom: valeur} texte et convertit en {seg_id: ao_id} UUID
-  - Tous les contrats API frontend maintenus (memes URLs, memes champs de reponse)
+- **Plateforme Marketym**: ajout date_debut_vague + completions_vague pour filtrer les compteurs cote enqueteur a partir d'une date donnee (migration 011). Endpoint POST /admin/affectations/set-vague.
+- **Endpoint /admin/questionpro/survey/{id}/responses** ajoute pour recuperer les reponses brutes via le proxy backend.
+- **DATATYM(TM) — Referentiel V3**: construction du systeme complet (5 indices proprietaires IPE/IRTA/ILUX/IGRO/ICON, 5 doctrines, grille A/B/C/D, scorecard, prescriptions CODIR, simulateur what-if). Voir DATATYM_53Slides_V3_EN_1.pptx.
+- **GETITHERE**: dossier strategique du projet de plateforme BI multi-verticales (au-dela du talent). Voir GETITHERE_Document_Strategique_2026.docx.
+- **Benchmark plateformes**: 15 plateformes analysees (Stears, Sagaci, Statista, Asoko, etc.). Voir Benchmark_Plateformes_DATATYM_2026.docx.
+- **Baromètre Gen Z**: collecte 1 200 répondants (673 Gen Z + 477 Millennials + 50 autres). Calcul indices V3. Rapport scientifique complet V2. Base consolidee complete avec colonne Generation.
+- **ACQ Employeurs**: identification de 6 surveys QuestionPro distincts. Survey principal (37 questions, orientation processus RH, 705 reponses). 5 surveys individuels + 1 historique (27 questions identiques, 293 reponses agregeables — perspective employeur sur les Gen Z).
+- **Document Miroir Deformant**: croisement vecu Gen Z (n=673) vs perception employeurs (n=293). Revele 5 angles morts (departs sous-estimes -40 pts, satisfaction surestimee +21 pts, equite surestimee +28 pts, etc.).
 
 **Prochain step**:
-- Attendre restauration Supabase (projet possiblement suspendu)
-- Appliquer migration 009 dans Supabase SQL Editor
-- Appliquer migration 010 dans Supabase SQL Editor
-- Lancer sync global depuis l'admin pour peupler response_counts
-- Verifier que les stats de quotas sont maintenant correctes
+- Appliquer migrations 009/010/011 en production (Supabase)
+- Lancer sync global pour peupler response_counts et completions_vague
+- Vague 2 du barometre prevue septembre 2026 (ajout variable sexe en priorite)
+- Construction effective de GETITHERE (verticale Finance d'abord)

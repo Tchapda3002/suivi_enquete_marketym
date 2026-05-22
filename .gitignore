@@ -34,3 +34,18 @@ logs/
 # Cache
 .cache/
 .pytest_cache/
+
+# Fichiers temporaires Office
+~$*
+
+# Livrables generes (lourds, regenerables via les scripts generate_*.py)
+*.docx
+*.xlsx
+*.pptx
+*.pdf
+*.ipynb
+
+# Exceptions : on garde les fichiers de documentation
+!HANDOVER.md
+!CLAUDE.md
+!README.md
