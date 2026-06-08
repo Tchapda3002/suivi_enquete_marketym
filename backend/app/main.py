@@ -387,17 +387,34 @@ async def fetch_survey_questions(survey_id: str) -> list:
                 result.append(question_info)
         return result
 
-async def fetch_survey_responses(survey_id: str, page: int = 1, per_page: int = 1000) -> list:
+async def fetch_survey_responses(survey_id: str, page: int = 1, per_page: int = 1000, max_pages: int = 50) -> list:
+    """Recupere TOUTES les reponses d'un survey en paginant.
+
+    QuestionPro plafonne perPage a ~1000 ; sans pagination les surveys de
+    plus de 1000 reponses etaient tronques (stats et comptages fausses).
+    On boucle a partir de `page` jusqu'a une page incomplete (derniere page)
+    ou `max_pages` (garde-fou anti-boucle). Si la 1ere page echoue -> [].
+    Une page intermediaire en echec arrete la boucle et renvoie l'accumule.
+    """
+    all_responses: list = []
     async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.get(
-            f"{QUESTIONPRO_BASE_URL}/surveys/{survey_id}/responses",
-            params={"page": page, "perPage": per_page},
-            headers={"api-key": settings.QUESTIONPRO_API_KEY}
-        )
-        if response.status_code != 200:
-            return []
-        data = response.json()
-        return data.get("response", [])
+        current = page
+        while current < page + max_pages:
+            response = await client.get(
+                f"{QUESTIONPRO_BASE_URL}/surveys/{survey_id}/responses",
+                params={"page": current, "perPage": per_page},
+                headers={"api-key": settings.QUESTIONPRO_API_KEY}
+            )
+            if response.status_code != 200:
+                break
+            batch = response.json().get("response", [])
+            if not batch:
+                break
+            all_responses.extend(batch)
+            if len(batch) < per_page:
+                break  # derniere page atteinte
+            current += 1
+    return all_responses
 
 def extract_segment_value_from_response(
     response: dict, question_id: str, answer_id_map: Optional[dict] = None
