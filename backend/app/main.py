@@ -934,46 +934,93 @@ def list_affectations_by_enquete(enquete_id: str, admin: dict = Depends(require_
         aff["completions_valides"] = aff.get("completions_total", 0) or 0
     return affectations.data
 
+async def compute_affectation_links(sb: Client, aff_id: str, base_url: str, survey_url_cache: Optional[dict] = None) -> dict:
+    """Calcule et met à jour lien_direct + lien_questionnaire pour une affectation.
+
+    Logique :
+    - lien_direct = URL QuestionPro avec ?custom1={token_enqueteur}
+    - lien_questionnaire = /r/{aff_id} (tracking Marketym), OU = lien_direct si survey individuel.
+      Un survey est dit "individuel" quand aff.survey_id != enquete.survey_id.
+    """
+    if survey_url_cache is None:
+        survey_url_cache = {}
+
+    aff_data = sb.table("affectations")\
+        .select("id, survey_id, enquetes(survey_id, survey_url), enqueteurs(token)")\
+        .eq("id", aff_id).execute()
+    if not aff_data.data:
+        return {}
+
+    aff = aff_data.data[0]
+    aff_survey_id = aff.get("survey_id")
+    enquete_obj = aff.get("enquetes") or {}
+    enquete_survey_id = enquete_obj.get("survey_id")
+    enqueteur_token = (aff.get("enqueteurs") or {}).get("token")
+    is_individual = aff_survey_id and enquete_survey_id and aff_survey_id != enquete_survey_id
+
+    updates: dict = {}
+
+    # 1. lien_direct
+    if aff_survey_id and enqueteur_token:
+        # Pour un survey individuel, on ne peut pas utiliser l'URL cachée de l'enquête principale
+        cached_url = enquete_obj.get("survey_url", "") if not is_individual else ""
+        if not cached_url:
+            if aff_survey_id not in survey_url_cache:
+                try:
+                    survey_info = await fetch_survey_stats(aff_survey_id)
+                    survey_url_cache[aff_survey_id] = (survey_info or {}).get("survey_url", "")
+                except Exception:
+                    survey_url_cache[aff_survey_id] = ""
+            cached_url = survey_url_cache.get(aff_survey_id, "")
+        if cached_url:
+            updates["lien_direct"] = f"{cached_url}?custom1={enqueteur_token}"
+        else:
+            updates["lien_direct"] = f"https://hcakpo.questionpro.com/t/{aff_survey_id}?custom1={enqueteur_token}"
+
+    # 2. lien_questionnaire
+    if is_individual and updates.get("lien_direct"):
+        # Survey individuel : on by-pass le tracking Marketym, on va direct sur QP
+        updates["lien_questionnaire"] = updates["lien_direct"]
+    else:
+        updates["lien_questionnaire"] = f"{base_url}/r/{aff_id}"
+
+    if updates:
+        sb.table("affectations").update(updates).eq("id", aff_id).execute()
+    return updates
+
+
+def _normalize_base_url(request: Request) -> str:
+    base_url = str(request.base_url).rstrip('/')
+    if base_url.startswith('http://') and 'localhost' not in base_url:
+        base_url = 'https://' + base_url[7:]
+    return base_url
+
+
 @app.post("/admin/affectations")
 async def create_affectation(data: CreateAffectation, request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     enquete = sb.table("enquetes").select("id, survey_id, survey_url").eq("id", data.enquete_id).execute()
     if not enquete.data:
         raise HTTPException(status_code=404, detail="Enquête introuvable")
-    enq_data = enquete.data[0]
-    survey_id = enq_data.get("survey_id")
+    survey_id = enquete.data[0].get("survey_id")
 
     enqueteur = sb.table("enqueteurs").select("id, token").eq("id", data.enqueteur_id).execute()
     if not enqueteur.data:
         raise HTTPException(status_code=404, detail="Enquêteur introuvable")
-    enqueteur_token = enqueteur.data[0].get("token")
-
-    lien_direct = None
-    if survey_id and enqueteur_token:
-        survey_url = enq_data.get("survey_url", "")
-        if not survey_url:
-            survey_info = await fetch_survey_stats(survey_id)
-            survey_url = (survey_info or {}).get("survey_url", "")
-        if survey_url:
-            lien_direct = f"{survey_url}?custom1={enqueteur_token}"
-        else:
-            lien_direct = f"https://hcakpo.questionpro.com/t/{survey_id}?custom1={enqueteur_token}"
 
     aff_res = sb.table("affectations").insert({
         "enquete_id": data.enquete_id,
         "enqueteur_id": data.enqueteur_id,
         "survey_id": survey_id,
-        "lien_direct": lien_direct,
         "objectif_total": data.objectif_total,
     }).execute()
     if not aff_res.data:
         raise HTTPException(status_code=400, detail="Erreur création affectation")
 
     aff_id = aff_res.data[0]["id"]
-    base_url = str(request.base_url).rstrip('/')
-    if base_url.startswith('http://') and 'localhost' not in base_url:
-        base_url = 'https://' + base_url[7:]
-    sb.table("affectations").update({"lien_questionnaire": f"{base_url}/r/{aff_id}"})\
-        .eq("id", aff_id).execute()
+    base_url = _normalize_base_url(request)
+
+    # Migration automatique des liens (lien_direct + lien_questionnaire)
+    await compute_affectation_links(sb, aff_id, base_url)
 
     # completions_pays (legacy)
     pays_list = sb.table("pays").select("id, quota").execute()
@@ -988,14 +1035,27 @@ async def create_affectation(data: CreateAffectation, request: Request, admin: d
         except Exception:
             pass
 
-    return aff_res.data[0]
+    final = sb.table("affectations").select("*").eq("id", aff_id).execute()
+    return final.data[0] if final.data else aff_res.data[0]
+
 
 @app.put("/admin/affectations/{id}")
-def update_affectation(id: str, data: UpdateAffectation, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
+async def update_affectation(id: str, data: UpdateAffectation, request: Request, admin: dict = Depends(require_admin), sb: Client = Depends(get_supabase)):
     payload = {k: v for k, v in data.dict().items() if v is not None}
     if not payload:
         raise HTTPException(status_code=400, detail="Aucune donnée")
+
+    # Détecter si les liens doivent être régénérés
+    must_recompute_links = any(k in payload for k in ("survey_id", "enqueteur_id", "enquete_id"))
+
     res = sb.table("affectations").update(payload).eq("id", id).execute()
+
+    if must_recompute_links:
+        base_url = _normalize_base_url(request)
+        await compute_affectation_links(sb, id, base_url)
+        final = sb.table("affectations").select("*").eq("id", id).execute()
+        return final.data[0] if final.data else (res.data[0] if res.data else {"ok": True})
+
     return res.data[0] if res.data else {"ok": True}
 
 @app.delete("/admin/affectations/{id}")
