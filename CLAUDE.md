@@ -40,7 +40,7 @@ npm run build        # Build production → dist/
 ## Architecture
 
 ### Backend (`/backend/app/`)
-- **`main.py`** (2163 lignes) - Fichier monolithique contenant TOUS les endpoints (admin, enqueteur, tracking, segmentations, quotas, sync QuestionPro). Pas de routeurs separees sauf pour l'auth.
+- **`main.py`** (~2300 lignes) - Fichier monolithique contenant TOUS les endpoints (admin, enqueteur, tracking, segmentations, quotas, sync QuestionPro). Pas de routeurs separees sauf pour l'auth. Heberge aussi le **scheduler d'auto-sync** (voir ci-dessous), les helpers QuestionPro (`get_survey`, `get_questions`, `get_responses`) et `normalize_segment_value()`.
 - **`db.py`** - DirectClient: wrapper PostgreSQL direct (psycopg2) avec API chainable compatible Supabase (.table().select().eq().execute()). ~3ms vs ~100ms par requete. Fallback automatique vers REST si connexion echoue.
 - **`auth/router.py`** (1067 lignes) - Endpoints d'authentification + dependance `require_admin`
 - **`auth/security.py`** - JWT, hash bcrypt, generation OTP
@@ -52,6 +52,12 @@ npm run build        # Build production → dist/
 - **`components/ui.jsx`** - Composants UI reutilisables (boutons, modals, tables, formulaires)
 - **Pages**: Login, Register, ActivateAccount (OTP premiere connexion), Dashboard (enqueteur), Admin
 
+### Auto-sync (scheduler)
+- `main.py` demarre un **`AsyncIOScheduler` (APScheduler)** dans le `lifespan` FastAPI.
+- Job `auto_sync` toutes les `SYNC_INTERVAL_MINUTES` min (defaut **30**, timezone UTC).
+- `run_auto_sync()` synchronise toutes les affectations dont l'enquete est `statut=en_cours`, avec un cache de reponses partage et un `Semaphore(3)` pour limiter la concurrence vers QuestionPro.
+- `GET /health` expose `next_sync` (prochaine execution du job).
+
 ### Flux d'authentification
 1. Inscription → `POST /auth/register`
 2. Premiere connexion → `POST /auth/login` retourne `otp_required` → redirect vers `/activate`
@@ -62,6 +68,19 @@ npm run build        # Build production → dist/
 - **Email**: Brevo - expediteur `marketym@hcexecutive.net`
 - **Auth**: JWT + OTP (code 6 chiffres, expire 5 min)
 - **Variables d'env**: voir `/backend/.env`
+
+## Scripts DATATYM (racine du repo)
+A la racine se trouvent ~21 scripts `generate_*.py` **independants de l'app web** : ils generent les livrables DATATYM(TM) (rapports DOCX, decks PPTX) a partir des donnees du barometre Gen Z / ACQ Employeurs. Ils ne sont pas importes par le backend et tournent en standalone.
+
+- **Lancer**: `python generate_<nom>.py` (depuis la racine). Dependances analytiques (pandas, numpy, python-pptx, python-docx) **non listees dans `backend/requirements.txt`** — a installer separement.
+- **Familles principales**:
+  - `generate_pptx_*.py` / `generate_masterclass.py` - decks PowerPoint (barometre, V3 unifie).
+  - `generate_rapport_*.py` - rapports DOCX (scientifique, strategique, synthetique, activite, complet).
+  - `generate_referentiel_genz.py` - referentiel V3 (indices IPE/IRTA/ILUX/IGRO/ICON).
+  - `generate_miroir.py` - "Miroir Deformant" (croisement Gen Z vecu vs perception employeurs).
+  - `generate_getithere.py` / `generate_framework_getithere.py` - dossier strategique plateforme BI.
+  - `generate_benchmark.py` - benchmark des plateformes data/BI.
+- **`debug_genz*.py` / `debug_mismatch.py`**: scripts d'analyse ad hoc (non productifs), a ignorer pour le dev de l'app.
 
 ## Donnees Importantes
 
@@ -216,10 +235,12 @@ Appliquer dans Supabase dans l'ordre :
 8. `backend/migrations/004_add_role_column.sql`
 9. `backend/migrations/005_table_clics.sql` - Tracking clics avec dedup IP
 10. `backend/migrations/006_cross_quotas.sql` - survey_url, answer_options JSONB, quota_configs
-11. `backend/migrations/007_cross_quotas.sql` - Tables quotas croises (quota_config_questions, etc.)
+11. `backend/migrations/007_demandes_affectation.sql` - Demandes d'affectation
 12. `backend/migrations/008_clics_statut_segmentation_id.sql` - Colonnes supplementaires
 13. `backend/migrations/009_remodel_v2.sql` - NOUVEAU modele: answer_options, response_counts, quota_groups, etc.
-14. `backend/migrations/010_data_migration.sql` - Migration donnees vers le nouveau modele
+14. `backend/migrations/009_unique_affectation.sql` - Contrainte unique sur affectation
+15. `backend/migrations/010_data_migration.sql` - Migration donnees vers le nouveau modele
+16. `backend/migrations/011_date_debut_vague.sql` - `date_debut_vague` + `completions_vague` (filtrage compteurs par date)
 
 **IMPORTANT** : Les migrations 009 et 010 sont les plus critiques. Appliquer 009 d'abord (cree les tables), puis 010 (peuple les donnees). Le backend actuel (main.py) n'ecrit QUE dans les nouvelles tables.
 
