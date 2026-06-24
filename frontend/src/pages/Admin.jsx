@@ -2522,6 +2522,51 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
     }
   }
 
+  function handleExport() {
+    const cols = [
+      { key: 'identifiant',         label: 'Identifiant' },
+      { key: 'prenom',              label: 'Prenom' },
+      { key: 'nom',                 label: 'Nom' },
+      { key: 'email',               label: 'Email' },
+      { key: 'telephone',           label: 'Telephone' },
+      { key: 'token',               label: 'Token QuestionPro' },
+      { key: 'role',                label: 'Role' },
+      { key: 'is_admin',            label: 'Admin' },
+      { key: 'actif',               label: 'Actif' },
+      { key: 'compte_configure',    label: 'Compte configure' },
+      { key: 'nb_enquetes',         label: 'Nb enquetes' },
+      { key: 'total_objectif',      label: 'Objectif total' },
+      { key: 'total_completions',   label: 'Completions totales' },
+      { key: 'total_clics',         label: 'Clics totaux' },
+      { key: 'derniere_connexion',  label: 'Derniere connexion' },
+      { key: 'created_at',          label: 'Cree le' },
+    ]
+
+    const escapeCsv = (v) => {
+      if (v === null || v === undefined) return ''
+      const s = String(v)
+      return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }
+
+    const header = cols.map(c => c.label).join(';')
+    const rows = enqueteurs.map(e =>
+      cols.map(c => escapeCsv(e[c.key])).join(';')
+    )
+
+    // BOM UTF-8 pour qu'Excel interprete correctement les accents
+    const csv = '﻿' + [header, ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const date = new Date().toISOString().slice(0, 10)
+    a.href = url
+    a.download = `enqueteurs_marketym_${date}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="p-6 animate-fadeIn max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
@@ -2530,6 +2575,9 @@ function EnqueteursListView({ enqueteurs, total, search, setSearch, onSelect, on
           <p className="text-sm text-[#6B7280]">{total} enqueteurs enregistres</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="secondary" onClick={handleExport}>
+            Exporter CSV
+          </Button>
           <Button variant="secondary" onClick={handleMigrate} loading={migrating}>
             Reformater les IDs
           </Button>
